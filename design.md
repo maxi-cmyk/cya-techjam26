@@ -1,158 +1,220 @@
-# Design — System Architecture & How It Works
+# Design — System Architecture & Evaluation
 
-This document describes how the system works end-to-end at a high level: the inference-time detection cascade, and the separate offline self-training loop that improves the model over time. For *what* each component is built from, see `techStack.md`. For *why* it must exist and what it must deliver, see `PRD.md`.
+This document describes the shipped inference pipeline and the offline evaluation loop. See `techStack.md` for implementation choices and `PRD.md` for product requirements.
 
----
+## 1. Design Principles
 
-## 1. Design Philosophy
+1. **Binary-only classification.** The only labels are `authentic` and `ai_generated`. Mixed-origin, composited, face-swapped, AI-enhanced, and otherwise AI-edited images are outside the dataset and product scope.
+2. **One transform per test image.** Every robustness variant is generated directly from its clean source with exactly one transformation and one parameter setting. A transformed output is never used as input to another transformation.
+3. **One-directional shortcuts.** A fast path may shortcut toward `ai_generated`, never toward `authentic`. Missing forensic evidence does not prove authenticity, especially after transformations erase artifacts.
+4. **Single live backbone.** Models may be compared offline, but only one backbone is loaded while scoring a test directory.
+5. **PRNU is auxiliary evidence.** A single-image PRNU-coherence proxy may support the backbone, but it is not a verified camera fingerprint and can never make a standalone verdict.
+6. **Texture is learned, not thresholded.** Fine-detail regions inform a lightweight learned head; rules such as “smooth equals AI” are prohibited because transformations can make authentic images equally smooth.
+7. **Color and optics require confidence.** Deterministic color-correlation and optical-fit features run inline, but absent or weak physical-camera cues are neutral rather than proof of synthesis.
+8. **Frequency signatures are family-dependent.** Stage 1 measures multiple spectral and neighborhood-pixel cues and is evaluated by generator/decoder family; it does not assume one GAN/diffusion/autoregressive fingerprint.
 
-Two principles run through every architectural decision:
+## 2. Inference Architecture
 
-1. **One-directional shortcuts only.** Any fast-path or early-exit stage may shortcut *toward* `ai_generated`, never toward "real." This is the fix for the plan's biggest historical bug (v6): early stages relying on signals that transforms (JPEG, blur, resize) systematically destroy — meaning a degraded fake would look "clean" to a weak stage and exit misclassified as real. By making every shortcut one-directional, a degraded or ambiguous image always falls through to the strongest available signal instead of silently passing as authentic.
-2. **Single live backbone at inference.** Multiple backbones may be *compared offline*, but only one is ever loaded when actually scoring a judge's test directory — this keeps the deliverable local, memory-light, and fast to load, per the resource constraints in the PRD.
-
----
-
-## 2. Inference-Time Architecture (the shipped pipeline)
-
-```
-Input Image
-     │
-     ▼
-Stage 0 — C2PA Provenance Check
-(parse + verify manifest, metadata only, no model)
-     │
-     ├── Valid manifest, explicitly claims AI-gen ──► Return ai_generated (audited on a 10% sample)
-     │
-     └── No manifest / stripped / invalid signature / claims "real" (untrusted)
-                     │
-                     ▼
-          Stage 1 — Frequency-Domain Fast-Track
-          (flags CLEAN, high-confidence synthetic only)
-                     │
-     ┌───────────────┴────────────────────┐
-     │                                     │
-Confident SYNTHETIC,               Everything else: uncertain,
-clean image only                   any suspected degradation,
-     │                              or "real"-leaning
-     ▼                                     ▼
-Return ai_generated              Stage 2 — Frozen CLIP-ViT Backbone
-(audited)                        + soft-probability patch aggregation
-                                  + face-region detector head (routing only)
-                                  + coherence-ablation head (frozen)
-                                  + 5-way classification head
-                                  + calibration (temperature scaling)
-                                             │
-                                             ▼
-                              pred + category + category_confidence
-                              (+ internal-only: verdict_source,
-                                 degradation-bias diagnostic)
+```text
+Input image
+    |
+    v
+Stage 0 — C2PA provenance check
+    |-- valid signed AI-generation claim --> high-confidence ai_generated
+    `-- missing, invalid, stripped, or other claim
+                    |
+                    v
+Stage 1 — family-aware frequency feature bank
+    |-- validated clean, high-confidence signature --> candidate ai_generated fast-track
+    `-- uncertain, transformed, or authentic-leaning
+                    |
+                    v
+Stage 2 — single frozen CLIP-ViT backbone
+          + binary classification head
+          + soft patch aggregation
+          + texture-aware local-detail head
+          + PRNU-coherence auxiliary features
+          + color-correlation and optical-aberration features
+          + temperature scaling
+                    |
+                    v
+       image_path + pred = P(ai_generated)
 ```
 
-### How each stage works
+### Stage 0 — Provenance
 
-**Stage 0 — Provenance (C2PA).** A library call, not a model. If an image carries a cryptographically valid manifest that explicitly names an AI generation tool, the system trusts that signed claim and exits immediately with a high-confidence `ai_generated` verdict. Every other outcome — no manifest, a manifest that fails signature verification, or a manifest that claims the image is real — is treated as *uninformative*, not as evidence of authenticity, and falls through to Stage 1. This mirrors how C2PA works in the real world: presence is strong evidence, absence proves nothing, because manifests are routinely stripped by re-encoding and platform uploads.
+C2PA is metadata evidence, not proof by absence. Only a cryptographically valid manifest that explicitly identifies AI generation can trigger an early synthetic verdict. Missing, stripped, invalid, or authenticity-claiming metadata falls through to the model.
 
-**Stage 1 — Frequency fast-track.** A cheap frequency-domain check (DCT/FFT-based) that recognizes the unmistakable spectral fingerprints left by many generators on *clean* images. It is deliberately narrow: it may only fast-track a confident synthetic verdict on images with no sign of degradation. It is never allowed to issue a "real" verdict on its own, because the same transforms this project must survive (JPEG, blur, resize) are exactly what erase frequency artifacts — a degraded fake would otherwise look clean here and slip through as real. Its raw score is still forwarded into Stage 2 as one input feature, so no information is wasted even when it doesn't get to make the final call.
+### Stage 1 — Frequency feature bank and conditional fast-track
 
-**Stage 2 — Main model.** Everything that reaches this point (the large majority of real-world images, especially anything transformed) goes through the single frozen CLIP-ViT backbone. On top of the shared frozen features sit several lightweight heads:
-- A **binary head** producing the core `P(ai_generated)` score.
-- A **5-way head** that further distinguishes untouched, traditionally-edited, AI-enhanced, face-swapped, and fully-synthetic images — trained as a lightweight probe rather than fine-tuning the whole backbone, so it can't destabilize the primary binary signal.
-- A **face-region detector**, which only activates when a face is present in the image; it routes patch attention toward face-boundary regions (blending seams, resolution mismatches, lighting inconsistencies) that matter specifically for face-swap detection. Cost is effectively zero for the majority of non-face images since the check is skipped entirely.
-- A **coherence-ablation head**, a frozen auxiliary probe that checks global scene coherence (does the lighting/perspective on a face match the rest of the scene) — a plausible extra signal specifically for face-swap detection.
-- **Patch aggregation** by soft-probability averaging (or attention pooling) rather than hard voting, so the verdict reflects a distribution across the image instead of over-weighting a handful of patches.
-- **Calibration** via temperature scaling, so the final confidence score is meaningful, not just the argmax.
+A deterministic feature bank measures 2-D log-spectrum structure, radial/angular power, periodic peaks, autocorrelation periodicity, and local neighboring-pixel relationships. These cues cover more than generic “high-frequency energy” and are forwarded to Stage 2 with validity/confidence values.
 
-**Output.** The system emits `pred` (`P(ai_generated)`, fully-synthetic-only), plus bonus fields `category` and `category_confidence`. Internal diagnostics (which stage actually produced the verdict, degradation-bias flags) are logged for evaluation but never leak into the public deliverable JSON.
+The expected signatures are organized by the image-producing decoder, not only the marketing label of the generator:
 
-### Why C2PA sits before the frequency screen, not instead of it
-They answer different questions and stack rather than compete: C2PA is *provenance* evidence (what a tool claims about how the image was made, if the tag survives), while the frequency screen is *forensic* evidence (artifacts left behind by generation itself, independent of any claim). An image can have no C2PA tag at all — most training-dataset images will — and still be an obvious synthetic image the frequency screen catches. Neither stage ever gets to shortcut toward "real."
+| Family | Candidate evidence | Boundary |
+|---|---|---|
+| CNN/GAN decoders | checkerboard/periodic replicas, anomalous high-frequency decay, upsampling-linked pixel dependencies | architecture changes or spectral suppression can remove them |
+| Latent generators with VAE/VQ decoders | decoder-scale periodic peaks and autocorrelation patterns; mid/high-frequency residual differences | can span diffusion, transformer, or autoregressive paradigms and often reflects the shared decoder/upsampler |
+| Pixel-space or otherwise decoder-free generators | empirical radial/angular or residual-spectrum differences | no latent-decoder periodicity assumption; must be learned and validated separately |
+| Autoregressive/token-based | possible tokenizer, VAE/VQ decoder, patch-grid, or multi-scale traces | no universal natural spectral signature is assumed; use held-out evidence only |
+| Unknown | generic multi-scale features only | never assigned to a family merely from a spectral guess |
 
-### Why only one backbone is loaded live
-Running two full models (a cascade backbone plus a "safety net" backbone) at inference for every image was identified as the single biggest resource risk given the local, `<2B`-parameter, limited-compute constraint. The insight that resolved this: knowing *which* backbone is more robust only requires a one-time **offline** comparison (produces a static table), not a live ensemble at inference. ConvNeXt-Tiny is still trained once, entirely offline, purely to produce that comparison table for the write-up — it is never loaded when scoring a judge's test directory. If it had won the offline comparison, it would have become the single shipped backbone instead of CLIP; the architecture is designed to be backbone-agnostic in this way.
+Generator family, decoder type, upsampling factor, checkpoint, and version are dataset metadata when known; they are not extra public output classes. Evaluation holds out complete generator families/checkpoints so a detector cannot pass by memorizing one model fingerprint.
 
----
+The early exit is **disabled by default**. It may be enabled only if a pre-agreed high-precision threshold holds on locked authentic data, held-out generator families, and every applicable independent-transform set. Even then, Stage 1 may only return `ai_generated`, never `authentic`; all other cases fall through and retain the feature vector for Stage 2.
 
-## 3. Data Assembly & Leakage Controls
+JPEG compression, blur, resize, and deliberate spectral correction can hide or alter these cues. A missing checkerboard or expected peak is therefore neutral. The feature bank is an auxiliary forensic signal, not proof of origin.
 
-Five classes are assembled with two guardrails layered on top of standard dataset construction:
+### Stage 2 — Main model
 
-- **Disjointness:** the same source real image can never appear in more than one class (e.g., can't be both `real_clean` and `real_edited`).
-- **JPEG/resolution matching:** before any generator-family holdout split is drawn, a common JPEG re-encode pass and common resize/crop pipeline is applied across *all* classes. Without this, an evaluation claiming "cross-generator generalization" can actually just be measuring an artifact of mismatched compression/resolution between the real and synthetic pools — a documented and easy-to-miss inflation of reported accuracy.
-- **Construction-pipeline diversification:** the three constructed classes (`real_edited`, `real_ai_enhanced`, `real_face_swapped`) are built with varied tools/parameters rather than one fixed pipeline, and at least one variant is held out from training. This stops the model from learning to recognize one specific tool's fingerprint (e.g., one Real-ESRGAN setting) instead of the underlying concept of "AI-enhanced."
+Most inputs pass through a frozen CLIP-ViT backbone with a lightweight binary head. A global image view is combined with selected local-detail patches using soft averaging or attention pooling. Texture, PRNU, color-correlation, and optical-aberration vectors are concatenated with the global representation before the final binary head. Temperature scaling converts the output into a calibrated `P(ai_generated)`.
 
-## 4. Evaluation Design
+### Texture-aware local-detail path
 
-Four tables make the robustness story explicit and auditable:
+The texture path preserves local evidence that can disappear when an entire high-resolution image is resized to the backbone input. It does not attempt to hard-code hair, skin, foliage, text, or reflection defects.
 
-1. **Transform robustness** — clean vs. each of the six transforms, split into **R.Acc.** (real-labeled accuracy) and **F.Acc.** (fake accuracy) per transform, plus a frozen-CLIP baseline row for comparison. This split exists specifically so a known field-wide failure mode — detectors collapsing toward predicting "real" under degradation rather than failing randomly — is directly visible instead of hidden inside one aggregate number.
-2. **Generator generalization** — held-out generator family, run only after the JPEG/resolution-matching step, so the result reflects genuine generalization rather than a matching artifact.
-3. **5-way confusion matrix** — where real-subclass errors concentrate (e.g., is `real_ai_enhanced` being confused with `ai_generated`).
-4. **Calibration (ECE)** — reported on both clean and transformed validation data *without re-fitting* the temperature parameter between the two, so any distribution-shift calibration gap becomes a visible, reportable finding rather than an unnoticed flaw.
+1. Compute a cheap multi-scale Laplacian/Sobel energy map on the current input.
+2. Select a small, fixed number of non-overlapping texture-rich patches, while retaining the global image view for context.
+3. Encode patches with the same live backbone or a small shared patch head; aggregate them with soft attention.
+4. Fuse the resulting texture vector with global CLIP, frequency, and PRNU features in the binary head.
 
-## 5. Offline Improvement Loop (Self-Training)
+Energy selects where to look, not what verdict to produce. The head learns structural differences from labeled data. Raw sharpness, smoothness, edge density, LBP, GLCM, or OCR confidence must not be used as fixed authenticity thresholds.
 
-Separate from the shipped inference pipeline, an iterative pseudo-labeling loop improves the model between the seed dataset and however much time remains in the hackathon. This entire loop runs offline / at training time — it never touches the inference path.
+Each clean training source may produce separate single-transform copies. The texture head sees authentic and AI-generated examples under the same JPEG, blur, resize, noise, color-jitter, and crop conditions, but no training or test copy chains transformations. This is intended to teach the head the difference between generator-linked structure and ordinary degradation without violating the benchmark boundary.
 
+LBP/GLCM descriptors may be logged for explainability and ablation, but are not core decision rules. Category-specific hair, foliage, or reflection detectors are excluded from the initial build because they add models and brittle assumptions without covering every image.
+
+Text/OCR is a stretch ablation only. If a text region is detected, structural OCR features may be added to the learned fusion vector; no text, low confidence, stylized fonts, unsupported languages, blur, or compression must remain neutral rather than automatically implying AI generation.
+
+Inference-time “degradation curves” are out of scope. Applying new blur or JPEG operations to an input that may already be transformed would create chained transformations, violate the independent-test protocol, and multiply inference cost.
+
+### PRNU auxiliary path
+
+Photo-response non-uniformity (PRNU) is a weak, multiplicative sensor pattern introduced during physical capture. A fully synthetic image has no true camera-sensor PRNU, although a generator or later processing can synthesize noise that resembles it.
+
+For each input image, the auxiliary path:
+
+1. denoises the image and computes the residual `W = image - denoised_image`;
+2. divides the residual and luminance image into aligned blocks;
+3. measures residual energy, the relationship between residual strength and local irradiance, cross-patch self-consistency, and candidate CFA/sensor periodicity;
+4. produces a small normalized feature vector and a scalar `prnu_coherence` diagnostic for fusion with CLIP features.
+
+This is deliberately called **PRNU coherence**, not camera identification. Classical device-level PRNU verification needs a reference fingerprint estimated from multiple images from the same sensor. With one unknown image, the system can only test whether its residual looks physically sensor-like. Low coherence can result from either synthesis or ordinary redistribution, so it cannot independently imply `ai_generated`; high coherence can also be simulated and cannot independently prove `authentic`.
+
+DSNU is not implemented. Reliable dark-signal isolation normally needs dark-frame/reference calibration, and fixed-pattern-noise correction can suppress the signal. A single exported image therefore does not provide a dependable DSNU estimate.
+
+### Color-correlation auxiliary path
+
+The CHROMA-inspired path measures pairwise dependence between image channels. It is deterministic and runs on the current input before fusion:
+
+1. decode sRGB consistently and derive both RGB and Lab representations;
+2. normalize each channel per image, with an epsilon and low-variance mask to avoid unstable correlations;
+3. compute compact global and local-window pairwise correlation statistics for R/G, R/B, G/B and L/a, L/b, a/b;
+4. concatenate the statistics and validity/coverage values after CLIP rather than changing the frozen three-channel CLIP input layer.
+
+RGB and Lab are both candidates. Lab separates luminance from chrominance, and normalized correlation is invariant to simple per-channel affine changes, but neither choice guarantees invariance to saturation shifts, nonlinear conversion, clipping, or general color jitter. The locked ablation chooses RGB, Lab, both, or neither.
+
+### Optical-aberration auxiliary path
+
+The optical vector combines two related but distinct estimates:
+
+- **Lateral chromatic aberration:** fit a low-parameter radial expansion/contraction between color channels around an estimated optical center, using edge support and channel alignment/mutual information. Log the fitted scale/center, residual, spatial consistency, support, and confidence.
+- **Radial lens distortion (stretch):** when enough long line or arc support exists, fit a simple barrel/pincushion coefficient with a plumb-line-style objective. Log the coefficient, fit residual, support, and confidence.
+
+Claude's proposed per-channel edge cross-correlation is acceptable as a cheap initialization, but a single global offset is not the physical lateral-CA model because aberration varies radially across the image. The final estimator must fit and validate the spatial model.
+
+These cues were developed primarily for camera calibration or inconsistency/tampering analysis, not as proof that an unknown image passed through a camera. Modern lens correction can remove them, crop/resize can change their geometry, weak-edge scenes can make them unidentifiable, and generators can simulate them. Therefore, invalid/low-confidence fits are masked to neutral and no optical statistic can issue a verdict by itself.
+
+All color and optics features run synchronously in the existing per-image batch loop. They add no service, queue, asynchronous worker, external API, new pipeline stage, or separately loaded neural model.
+
+The public JSON contains only `image_path` and `pred`. Diagnostics such as `verdict_source`, transform name, and degradation-bias measurements remain internal.
+
+## 3. Data Assembly and Leakage Controls
+
+- **Strict provenance:** authentic samples originate from genuine capture; AI samples are fully synthetic with no authentic source.
+- **Exclusions:** mixed-origin, image-to-image edits of authentic sources, inpainting of authentic images, face swaps, AI enhancement, compositing, and ambiguous provenance.
+- **Split integrity:** a clean source and every variant derived from it belong to one split only.
+- **Format matching:** balance resolution, aspect ratio, and file-format artifacts across both labels before drawing generator-family holdouts.
+- **Class balance:** keep the clean test set and every robustness set balanced between `authentic` and `ai_generated`, or report balanced accuracy if exact balance is impossible.
+
+## 4. Independent Transformation Protocol
+
+For every clean test image, construct separate variants for each parameter setting:
+
+| Transform | Parameter settings |
+|---|---|
+| JPEG compression | quality 90, 70, 50, 30 |
+| Gaussian blur | sigma 0.5, 1.0, 2.0 |
+| Resize and restore | 0.5x, 0.25x |
+| Gaussian noise | sigma 0.02, 0.05, 0.10 |
+| Color jitter | brightness/contrast/saturation +/-20% |
+| Center crop | retain 80% |
+
+Every cell above is its own evaluation set, created from the clean source. There are no cases such as JPEG plus resize, blur plus noise, repeated transformations, alpha overlays, or blends between consecutive outputs.
+
+For color jitter, the authentic and AI-generated training copies use the same parameter ranges, probability, and random-sampling policy. Per-channel normalization is applied before correlation. This mitigates simple brightness/contrast shifts but does not neutralize saturation changes, so color-correlation and optics results are reported separately for the color-jitter row.
+
+## 5. Evaluation and Scoring
+
+The evaluation is split evenly:
+
+`Final score = 0.50 × clean accuracy + 0.50 × robustness score`
+
+`Robustness score = mean binary accuracy across all independent transform-and-parameter sets`
+
+Report the following for the clean set and every independent transformation row:
+
+- overall binary accuracy
+- authentic accuracy (R.Acc.)
+- AI-generated accuracy (F.Acc.)
+- binary confusion matrix
+- Expected Calibration Error (ECE)
+
+The temperature parameter is fitted once on clean validation data and is not refitted on transformed sets. This makes any calibration loss under distribution shift visible.
+
+Generator-generalization results use held-out generator families and the same format-matching rules. A frozen CLIP baseline and the offline ConvNeXt-Tiny comparison may be included as additional rows.
+
+The auxiliary paths are evaluated with **CLIP-only**, single-family feature baselines, incremental additions, and the full fused model. At minimum this covers frequency, texture, PRNU, RGB/Lab correlation, chromatic aberration, and eligible radial-distortion features. Frequency results are additionally split by generator/decoder family and held-out checkpoint. The same ablations run on clean images and every independently generated transformation set. Report both accuracy and feature coverage/confidence: a method that appears accurate only because it abstains on difficult images is not considered robust. Measurements, not expectations, decide which paths remain in the shipped model.
+
+## 6. Offline Improvement Loop
+
+Self-training stays binary and separate from the shipped inference path:
+
+```text
+Seed labeled set (~60%) --> train seed model
+                               |
+Held-out pool (~25%) ----------+
+                               v
+                    predict binary confidence
+                         |              |
+                  high confidence   low confidence
+                         |              |
+                down-weighted       review or exclude
+                pseudo-label        ambiguous provenance
+                         `------.-------'
+                                v
+                    retrain candidate checkpoint
+                                |
+                                v
+                    locked validation set (~15%)
+                         |              |
+                  no regression     either label regresses
+                         |              |
+                     accept          roll back and log
 ```
-Seed labeled set (~60%) ──► Train seed model (iteration 0)
-                                    │
-                                    ▼
-Held-out "unlabeled" pool (~25%, labels hidden)
-                                    │
-                        Run current model → get pred + category + confidence
-                                    │
-                    ┌───────────────┼────────────────────────┐
-                    ▼               ▼                        ▼
-            High confidence   Low confidence          Face detected?
-            (per-class          │                            │
-             threshold)         ▼                    ┌───────┴───────┐
-                    │      Human review queue         ▼               ▼
-                    │      (CSV log + minimal      Run specialist   No specialist
-                    │       viewer)                 (DeepfakeBench /  → normal
-                    │           │                    RetouchingFFHQ)   routing
-                    ▼           ▼                        │
-          Accept as pseudo-  Reviewed examples      Agree → stronger
-          label (down-       → seed set              pseudo-label
-          weighted 0.5–0.7x)  (full trust)           Disagree → forced
-                    │                                  human review
-                    └───────────────┬────────────────────────┘
-                                    ▼
-                    Retrain / fine-tune from previous checkpoint
-                    (re-run full augmentation on new examples too)
-                                    │
-                                    ▼
-                    Evaluate ONLY on locked validation set (~15%,
-                    never pseudo-labeled, never touched otherwise)
-                                    │
-                    ┌───────────────┴───────────────┐
-                    ▼                                ▼
-          Improved / held steady            Regressed on any class
-          → becomes new current model         by more than tolerance
-          → return to pseudo-labeling         → ROLL BACK to previous
-                                                 checkpoint, log why
-```
 
-### Why three pools, not two
-The held-out "unlabeled" pool secretly retains its ground-truth labels (hidden from the training loop only) specifically so pseudo-label accuracy can be measured at every iteration — this turns the loop from a black box into something with a reportable, per-iteration accuracy metric. The locked validation set is the one pool self-training is never allowed to touch in any way, which is what makes every other reported number trustworthy rather than circular.
+Use separate confidence thresholds for `authentic` and `ai_generated`. Pseudo-labels are down-weighted relative to verified labels. The locked validation set is never pseudo-labeled, and a candidate is rejected if either label regresses beyond the agreed tolerance.
 
-### Why confidence gating is per-class, not global
-Classes are imbalanced and some (`real_ai_enhanced`, `real_face_swapped`) are inherently harder and more prone to overconfidence. A single global threshold would let the model accept low-quality pseudo-labels on its weakest classes while being needlessly conservative on its strongest ones. Per-class thresholds, started conservative (e.g., 90th percentile of that class's own confidence distribution), address this directly.
+## 7. Known Gaps
 
-### Why a specialist-disagreement check exists for face-containing images
-Confidence alone can't catch a model that is *confidently wrong*. Where an independent specialist model exists — DeepfakeBench (Effort checkpoint) for face-swaps, a RetouchingFFHQ-trained head for facial AI-retouching — that specialist's verdict is compared against the cascade's. Agreement strengthens the pseudo-label; disagreement forces human review regardless of either model's individual confidence, since disagreement between two independent signals is a stronger "this is a hard example" signal than low confidence alone. This check only runs during the offline self-training loop, never in the shipped `<2B` inference path, and only for face-containing images — non-face classes fall back to plain per-class confidence gating, which is stated explicitly as a deliberate asymmetry rather than an oversight.
-
-### Why pseudo-labels are down-weighted and rollback is automatic
-A wrong pseudo-label can drag a model further off course than it corrects. Down-weighting pseudo-labeled loss contributions (0.5–0.7×) relative to true-labeled ones limits that risk, and the rollback rule — discard the iteration and revert to the previous checkpoint if any class regresses beyond a small tolerance on the locked validation set — is the backstop that prevents confirmation-bias drift from silently compounding across iterations.
-
-### Retraining trigger
-Two independent proxy signals, since either alone is easy to game unintentionally:
-1. **Confidence drift** on the team's own uploaded test images (a rising rate of low-confidence predictions suggests the model is seeing something outside its training distribution).
-2. **Scheduled locked-validation re-checks** every N pseudo-labeling batches, which catch slow, confidently-wrong degradation that confidence drift alone might miss.
-
-Either signal firing triggers another loop cycle; every trigger event and its outcome is logged as evidence of a genuinely iterative system.
-
-## 6. Known Design Gaps (carried forward for follow-up)
-- No defined minimum-resolution or corruption-detection baseline yet for malformed/garbage input images.
-- Error-analysis tooling (a script to pull the top-10 false positives/negatives per class) is specified as a requirement but not yet built.
-- Whether `verdict_source` should be surfaced as a visible breakdown in the demo/report (recommended, low-effort, not yet decided as final).
+- No minimum-resolution or corruption-detection baseline is defined yet.
+- Error-analysis tooling for top false positives and false negatives is specified but not built.
+- The team must define a reproducible provenance-screening process for excluding mixed and AI-edited samples.
+- Whether to expose an aggregated `verdict_source` breakdown in the report remains open; it is not part of the public JSON.
+- The single-image PRNU feature definition, block size, denoiser, and acceptance criteria require validation on the locked dataset.
+- Texture patch size/count, energy-map scale, aggregation method, and inference budget require locked-data ablation.
+- OCR is not approved as a core dependency unless it adds value across languages and transformed text-rich images without increasing authentic-image false positives.
+- RGB versus Lab correlation representation, window size, and low-variance handling require locked-data selection.
+- Chromatic-aberration and radial-distortion estimators need explicit minimum-support and fit-confidence criteria; their usable-image coverage is unknown.
+- The Stage 1 fast-track threshold is not approved until family-stratified held-out results satisfy the agreed precision and robustness gate.
+- Autoregressive/token-based coverage depends on obtaining clearly documented generators and decoder metadata; otherwise results remain in the `unknown` family bucket.

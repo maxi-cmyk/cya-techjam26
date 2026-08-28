@@ -1,148 +1,131 @@
-# Step 3a Overview — Specialist-Model Disagreement Check
+# Models — Binary Detection Plan
 
-## Base model (unchanged, not a comparison target)
+This project detects only two source classes: **fully authentic images** and **fully AI-generated images**. It does not attempt to detect AI editing, face swaps, mixed-origin images, compositing, or partial-AI content.
 
-**Frozen CLIP ViT-L/14 (~304M params) + RINE-style multi-layer feature extraction.**
-This is your primary model — reads CLS tokens from multiple CLIP transformer blocks (not just the final layer), combined via a small trainable importance estimator, feeding all four downstream heads (binary, 5-way, coherence, patch-aggregation). This is what Step 3a compares *against*, never a thing Step 3a replaces.
+## Primary Model
 
-## Trigger condition
+The shipped detector is a frozen CLIP ViT-L/14 vision backbone with RINE-style multi-layer feature extraction, a texture-aware local-detail head, deterministic PRNU/color/optics feature vectors, and a lightweight binary classification head.
 
-Specialist comparison only runs on **face-containing images**, determined by the RetinaFace (MobileNet-0.25) detector that already runs on every image as part of your v7/v8 face-region routing. No face → skip Step 3a entirely, fall through to Step 3's plain per-class confidence gating.
+- Input: one image.
+- Output: calibrated `P(ai_generated)`.
+- Labels: `authentic` and `ai_generated` only.
+- Parameter budget: approximately 304M for the vision backbone, below the 2B limit.
+- Inference: one live backbone; no ensemble and no face- or edit-specific specialists.
+- Local input: a fixed budget of texture-rich patches selected by multi-scale edge/energy maps.
+- Auxiliary input: single-image PRNU-coherence features derived from the noise residual.
+- Auxiliary input: RGB/Lab inter-channel correlations plus confidence-aware chromatic-aberration and optional radial-distortion estimates.
 
-## Specialist models, per category
+Patch-level probabilities may be combined using soft averaging or attention pooling. Temperature scaling is fit on the clean validation set and then reused unchanged for every robustness set so distribution-shift effects remain measurable.
 
-| Category | Specialist model(s) | Why this one | Params | When it runs |
-|---|---|---|---|---|
-| `real_face_swapped` | **DeepfakeBench — Xception** (default, every iteration) | Cheap, fast, standard baseline across the self-training loop | ~22M | Every face-containing image, every iteration |
-| `real_face_swapped` (tie-breaker only) | **DeepfakeBench — Effort** (CLIP-based) | Better cross-dataset generalization than Xception; reserved for disputed cases only, since it's a full CLIP ViT-L/14 forward pass and expensive to run on the whole pool every iteration | ~304M | Only on images where Xception already disagreed with the cascade |
-| `real_ai_enhanced` | **RetouchingFFHQ-trained head** | Only existing open precedent for AI-enhancement detection — but face-retouch-specific (beauty/smoothing/whitening/eye-enlarging/face-lifting), not general upscaling/denoise | Small (probe/MAM module on a CNN backbone, tens of M at most) | Only face-containing images where the cascade predicts `real_ai_enhanced` |
-| `ai_generated` | *(none — see below)* | Comparing your own CLIP+RINE model to itself isn't an independent signal | — | Not applicable |
-| `real_edited` | *(none available)* | No open specialist model found in research | — | Falls back to Step 3 confidence gating only |
-| `real_clean` | *(none — default class)* | Nothing to specialize against | — | Falls back to Step 3 confidence gating only |
+## Family-Stratified Frequency Feature Bank
 
-## Model loading strategy
+Stage 1 extracts a compact deterministic vector containing:
 
-- CLIP+RINE base model: loaded once, resident for the entire session (runs on every image regardless).
-- RetinaFace face detector: loaded once, negligible cost, runs on every image (already budgeted in v7/v8).
-- DeepfakeBench-Xception: loaded once at the start of each self-training iteration's pseudo-labeling pass (Step 3); run conditionally per-image based on face-presence.
-- DeepfakeBench-Effort: loaded once per iteration, but only *invoked* on the smaller disagreement subset — not run on every face-containing image.
-- RetouchingFFHQ head: loaded once per iteration, run conditionally on face + `real_ai_enhanced` prediction.
-- All specialists can be released from memory between self-training iterations if memory-constrained, or kept resident for the run — loading cost is paid once regardless, forward-pass cost is what's conditional.
+- 2-D log FFT/DCT magnitude summaries
+- radial and angular power distributions
+- periodic peak locations/prominence
+- residual autocorrelation peak statistics
+- local neighboring-pixel dependency statistics
+- input-quality and feature-validity indicators
 
-## Routing logic
+These features target decoder and upsampling behavior rather than treating all synthetic images as one spectral family. Convolutional decoders may show checkerboards, replicated spectra, or anomalous high-frequency decay regardless of whether the upstream generator is a GAN, diffusion model, transformer, or autoregressive model. Latent and token systems may inherit periodic traces from a shared VAE/VQ decoder. Pixel-space or otherwise decoder-free systems form a separate empirical stratum; no universal signature is assumed.
 
-```
-Stage 2 output (pred, category, category_confidence)
-              |
-        face detected? (RetinaFace, already run on every image)
-        |
-        |-- NO  -> No-specialist path: Step 3 confidence gating only
-        |          [covers: real_edited, real_clean,
-        |           and real_ai_enhanced predictions with no face]
-        |
-        |-- YES -> run DeepfakeBench-Xception
-                        |
-                agree with cascade's category?
-                |-- YES -> stronger pseudo-label (raises effective
-                |           confidence for Step 3's threshold)
-                |-- NO  -> run DeepfakeBench-Effort as tie-breaker
-                                |
-                        still disagree? -> disagreement flag = true
-                                            -> human review, regardless
-                                               of individual confidence
+Every AI training/evaluation sample records generator family, checkpoint/version, decoder/tokenizer type, and known scale factors where available. Unknown provenance stays `unknown`. These fields support stratified evaluation only and do not expand the binary public prediction contract.
 
-           [in parallel, if category == real_ai_enhanced]
-           -> run RetouchingFFHQ head
-                   |
-           agree with cascade? -> same accept/flag logic as above
-```
+Stage 1's synthetic early exit is disabled by default. Enabling it requires a locked high-precision result across authentic images, held-out generator families/checkpoints, and independent transforms. Missing or weak spectral evidence is neutral and always falls through to Stage 2.
 
-## Coverage summary (the honest asymmetry)
+## Texture-Aware Local-Detail Head
 
-- **Full specialist coverage:** `real_face_swapped`
-- **Partial coverage (faces only):** `real_ai_enhanced`
-- **No coverage:** `real_edited`, `real_clean`, non-face `real_ai_enhanced`, `ai_generated` (self-comparison excluded as non-independent)
+A multi-scale Laplacian/Sobel map ranks non-overlapping patches by local detail energy. The model retains both a global image view and a small fixed number of selected patches so selection does not discard semantic context. Selected patches share the live CLIP backbone or use a small shared head, then soft attention aggregates their representations.
 
-State this explicitly in the writeup — it reflects what specialist models actually exist in the field (per research), not a gap in your own design effort.
+Patch energy only chooses candidate regions. It is not an authenticity score. The learned head must distinguish structural texture evidence from ordinary loss of detail using authentic and AI-generated training examples that receive the same **single** transformations. No fixed “smooth,” “regular,” low-variance, LBP, GLCM, or OCR threshold may directly change the verdict.
 
-## Logging (extends Step 7's review-queue CSV)
+LBP and GLCM may be logged as interpretable diagnostics. OCR-derived structure is a stretch feature evaluated only on detected text regions; missing text and low OCR confidence are neutral. Bespoke hair, foliage, and reflection detectors are not part of the initial model.
 
-Add two columns: `specialist_verdict` (empty if no specialist ran) and `specialist_disagreement` (boolean, empty if no specialist ran). Enables reporting specialist-agreement rate as an Error Analysis / Table 1 metric.
+The detector never creates extra blurred, compressed, or resized variants at inference. Such a degradation-curve method would chain transformations on already transformed inputs and fall outside the agreed evaluation protocol.
 
-## Scope boundary
+## PRNU-Coherence Feature Extractor
 
-Everything in Step 3a runs during the **self-training loop only** — never part of the shipped inference script that processes a judge's test directory. Does not affect the <2B parameter constraint on the deliverable's inference path. State this distinction explicitly to avoid it reading as scope creep against the hackathon's compute/local-only requirements.
+PRNU is a low-amplitude, multiplicative pattern associated with a physical image sensor. The extractor denoises one input image, computes its residual, and summarizes block-wise residual statistics, irradiance coupling, spatial self-consistency, and candidate CFA periodicity. The normalized vector is fused with CLIP features before the binary head.
 
+This is an experimental single-image proxy, not classical device attribution. There is no known-camera reference fingerprint and no multi-image sensor estimate, so the feature cannot verify which camera captured an image—or prove that a camera captured it at all. PRNU is never a gate: weak PRNU cannot independently mean `ai_generated`, and strong sensor-like noise cannot independently mean `authentic`.
 
+DSNU is excluded because a reliable estimate normally needs dark-frame/reference calibration, while correction can suppress the residual before export. That evidence is unavailable from one unknown image.
 
+## Color and Optical Feature Extractors
 
-## Evaluation Design
+### Inter-channel correlation
 
-Four tables make the robustness story explicit and auditable:
+Compute standardized pairwise correlation statistics in both RGB and Lab, globally and over local windows. Include masks/coverage for nearly constant channels or windows. The compact vector is concatenated after CLIP; correlation maps are not inserted as extra channels into the frozen three-channel backbone.
 
-1. **Transform robustness** — clean vs. each of the six transforms, split into **R.Acc.** (real-labeled accuracy) and **F.Acc.** (fake accuracy) per transform, plus a frozen-CLIP baseline row for comparison. This split exists specifically so a known field-wide failure mode — detectors collapsing toward predicting "real" under degradation rather than failing randomly — is directly visible instead of hidden inside one aggregate number.
-2. **Generator generalization** — held-out generator family, run only after the JPEG/resolution-matching step, so the result reflects genuine generalization rather than a matching artifact.
-3. **5-way confusion matrix** — where real-subclass errors concentrate (e.g., is `real_ai_enhanced` being confused with `ai_generated`).
-4. **Calibration (ECE)** — reported on both clean and transformed validation data *without re-fitting* the temperature parameter between the two, so any distribution-shift calibration gap becomes a visible, reportable finding rather than an unnoticed flaw.
+Lab is a candidate, not a guaranteed winner. Per-channel standardization removes sensitivity to affine shifts within each channel, but saturation, clipping, nonlinear color conversion, and other jitter effects can still change the correlation structure. RGB-only, Lab-only, and combined variants are selected on locked clean and independent color-jitter results.
 
-## Offline Improvement Loop (Self-Training)
+### Optical aberrations
 
-Separate from the shipped inference pipeline, an iterative pseudo-labeling loop improves the model between the seed dataset and however much time remains in the hackathon. This entire loop runs offline / at training time — it never touches the inference path.
+Estimate lateral chromatic aberration with a radial inter-channel scale/center model and emit its parameters, residual, spatial consistency, edge support, and confidence. A simple channel-edge cross-correlation may initialize the fit but cannot replace the radial model.
 
-```
-Seed labeled set (~60%) ──► Train seed model (iteration 0)
-                                    │
-                                    ▼
-Held-out "unlabeled" pool (~25%, labels hidden)
-                                    │
-                        Run current model → get pred + category + confidence
-                                    │
-                    ┌───────────────┼────────────────────────┐
-                    ▼               ▼                        ▼
-            High confidence   Low confidence          Face detected?
-            (per-class          │                            │
-             threshold)         ▼                    ┌───────┴───────┐
-                    │      Human review queue         ▼               ▼
-                    │      (CSV log + minimal      Run specialist   No specialist
-                    │       viewer)                 (DeepfakeBench /  → normal
-                    │           │                    RetouchingFFHQ)   routing
-                    ▼           ▼                        │
-          Accept as pseudo-  Reviewed examples      Agree → stronger
-          label (down-       → seed set              pseudo-label
-          weighted 0.5–0.7x)  (full trust)           Disagree → forced
-                    │                                  human review
-                    └───────────────┬────────────────────────┘
-                                    ▼
-                    Retrain / fine-tune from previous checkpoint
-                    (re-run full augmentation on new examples too)
-                                    │
-                                    ▼
-                    Evaluate ONLY on locked validation set (~15%,
-                    never pseudo-labeled, never touched otherwise)
-                                    │
-                    ┌───────────────┴───────────────┐
-                    ▼                                ▼
-          Improved / held steady            Regressed on any class
-          → becomes new current model         by more than tolerance
-          → return to pseudo-labeling         → ROLL BACK to previous
-                                                 checkpoint, log why
-```
+Optionally estimate barrel/pincushion distortion from long line/arc support with a one-parameter radial model. This is scene-dependent: when geometric support is insufficient, the feature is masked and its confidence/coverage is recorded.
 
-### Why three pools, not two
-The held-out "unlabeled" pool secretly retains its ground-truth labels (hidden from the training loop only) specifically so pseudo-label accuracy can be measured at every iteration — this turns the loop from a black box into something with a reportable, per-iteration accuracy metric. The locked validation set is the one pool self-training is never allowed to touch in any way, which is what makes every other reported number trustworthy rather than circular.
+Neither feature authenticates an image. Camera correction may remove optical effects, generators may imitate them, and blur/resize/crop/color processing may corrupt their estimates. Missing or low-confidence values remain neutral. Both extractors run inline and add no model, stage, queue, or async service.
 
-### Why confidence gating is per-class, not global
-Classes are imbalanced and some (`real_ai_enhanced`, `real_face_swapped`) are inherently harder and more prone to overconfidence. A single global threshold would let the model accept low-quality pseudo-labels on its weakest classes while being needlessly conservative on its strongest ones. Per-class thresholds, started conservative (e.g., 90th percentile of that class's own confidence distribution), address this directly.
+## Offline Comparison Model
 
-### Why a specialist-disagreement check exists for face-containing images
-Confidence alone can't catch a model that is *confidently wrong*. Where an independent specialist model exists — DeepfakeBench (Effort checkpoint) for face-swaps, a RetouchingFFHQ-trained head for facial AI-retouching — that specialist's verdict is compared against the cascade's. Agreement strengthens the pseudo-label; disagreement forces human review regardless of either model's individual confidence, since disagreement between two independent signals is a stronger "this is a hard example" signal than low confidence alone. This check only runs during the offline self-training loop, never in the shipped `<2B` inference path, and only for face-containing images — non-face classes fall back to plain per-class confidence gating, which is stated explicitly as a deliberate asymmetry rather than an oversight.
+ConvNeXt-Tiny may be trained once as an offline baseline. It is not loaded alongside CLIP during inference. If it wins the locked binary evaluation, it can replace CLIP as the single shipped backbone.
 
-### Why pseudo-labels are down-weighted and rollback is automatic
-A wrong pseudo-label can drag a model further off course than it corrects. Down-weighting pseudo-labeled loss contributions (0.5–0.7×) relative to true-labeled ones limits that risk, and the rollback rule — discard the iteration and revert to the previous checkpoint if any class regresses beyond a small tolerance on the locked validation set — is the backstop that prevents confirmation-bias drift from silently compounding across iterations.
+## Dataset Contract
 
-### Retraining trigger
-Two independent proxy signals, since either alone is easy to game unintentionally:
-1. **Confidence drift** on the team's own uploaded test images (a rising rate of low-confidence predictions suggests the model is seeing something outside its training distribution).
-2. **Scheduled locked-validation re-checks** every N pseudo-labeling batches, which catch slow, confidently-wrong degradation that confidence drift alone might miss.
+Only samples with clear source provenance are eligible:
 
-Either signal firing triggers another loop cycle; every trigger event and its outcome is logged as evidence of a genuinely iterative system.
+| Label | Included | Excluded |
+|---|---|---|
+| `authentic` | Genuinely captured source images | AI-enhanced, face-swapped, composited, or ambiguous images |
+| `ai_generated` | Fully synthetic images with no authentic source | Image-to-image edits, inpainting of authentic images, partial-AI or mixed content |
+
+A clean source and every test variant derived from it must remain in the same split to prevent leakage.
+
+## Independent Transformation Protocol
+
+Each robustness sample is produced directly from its clean source with exactly one transformation and one parameter setting:
+
+- JPEG compression
+- Gaussian blur
+- Resize and restore
+- Gaussian noise
+- Color jitter
+- Center crop
+
+No transformed output is passed into another transformation. Results are recorded separately for every transform and parameter; there are no mixed, sequential, or overlaid transformation cases.
+
+## Evaluation and Score
+
+The final score is split equally:
+
+`Final score = 0.50 × clean accuracy + 0.50 × robustness score`
+
+The robustness score is the mean binary accuracy across all independent transform-and-parameter test sets. For the clean set and every robustness row, also report:
+
+- authentic accuracy (R.Acc.)
+- AI-generated accuracy (F.Acc.)
+- overall binary accuracy
+- binary confusion matrix
+- Expected Calibration Error (ECE)
+- PRNU-only, CLIP-only, and fused accuracy
+- texture-only, CLIP + texture, CLIP + PRNU, and full-fusion accuracy
+- distribution of `prnu_coherence` by label
+- RGB-only, Lab-only, chromatic-aberration-only, eligible radial-distortion-only, and incremental full-fusion results
+- color/optics feature validity, coverage, and confidence by label and transform
+- frequency-only accuracy and candidate fast-track precision/coverage by decoder family, checkpoint holdout, and transform
+
+This reporting exposes class collapse even when the aggregate 50/50 score looks acceptable.
+
+PRNU is expected to be most recoverable after cropping and fragile under JPEG compression, blur, resize, and added noise. Those are hypotheses to test independently, not assumptions used to alter labels or scoring.
+
+Retain the texture head only if it improves the locked 50/50 score or a pre-agreed robustness diagnostic without causing unacceptable class-specific regression. Also measure correlation between texture, frequency, and PRNU outputs to identify redundant low-level signals.
+
+Apply the same retention rule to color and optical features. Color-jitter parameters must be sampled from the same distribution for both labels, and feature degradation under color jitter must be reported rather than normalized away.
+
+Apply the retention rule to every spectral sub-feature as well. Remove family-specific cues that add no held-out value, and measure correlation with texture and PRNU so redundant high-frequency evidence is not counted as independent support.
+
+## Offline Improvement Loop
+
+Self-training remains binary. High-confidence pseudo-labels are accepted using separate thresholds for `authentic` and `ai_generated`, then down-weighted during retraining. Low-confidence or uncertain-provenance images are reviewed or excluded. A candidate checkpoint is rolled back if either label's locked-validation accuracy regresses beyond the agreed tolerance.

@@ -10,13 +10,20 @@ Generative AI makes it trivial to produce highly realistic synthetic images at s
 
 **In scope:**
 - Image-level AIGC (AI-generated content) detection
+- Binary classification of fully AI-generated images versus authentic images
 - Robustness to common image transformations (JPEG compression, blur, resize, noise, color jitter, cropping)
+- Experimental PRNU-coherence features as physical-capture evidence and a documented robustness ablation
+- Texture-aware local-detail features trained and evaluated under the same independent-transform protocol
+- Deterministic inter-channel color and optical-aberration features fused into Stage 2 with confidence/coverage indicators
+- Generator-family-stratified spectral analysis covering decoder/upsampling fingerprints rather than assuming one universal frequency signature
 - Feature engineering, model design, evaluation design, error analysis, explainability
 
 **Out of scope:**
 - Full production deployment / platform-wide moderation systems
 - Non-image modalities (video, audio)
-- Adversarial-perturbation robustness, pixel-mask segmentation beyond face-region routing (time-permitting only)
+- Mixed-origin images, composited images, AI-edited authentic images, face swaps, and partial-AI content
+- Chained or overlaid transformations in the robustness benchmark
+- Adversarial-perturbation robustness and pixel-mask segmentation
 
 **Constraints:**
 - Hackathon-scale prototype, limited compute, no access to internal production systems
@@ -32,17 +39,9 @@ A platform trust & safety team (or similar) needs a tool that ingests a director
 
 ### 4.1 Core Classification
 - Primary output: **`pred`** — a calibrated `P(ai_generated)` score, strictly for fully-synthetic images (no real source image at all).
-- Secondary output (bonus, not required by spec): a **5-way category** classification, richer than binary real/fake:
-
-| Category | Meaning |
-|---|---|
-| `real` (clean) | Untouched camera photo |
-| `real_edited` | Real photo, traditionally edited (HDR, Photoshop, filters) |
-| `real_ai_enhanced` | Real photo, AI-touched (upscale, beauty filter, auto-enhance) |
-| `real_face_swapped` | Real photo, face swapped/deepfaked |
-| `ai_generated` | Fully AI-generated, no real source image |
-
-- `real_face_swapped` does **not** count toward `pred` — it is surfaced only via `category` / `category_confidence`, keeping `pred` semantically clean.
+- Ground-truth labels are limited to **`authentic`** and **`ai_generated`**.
+- `authentic` means a genuinely captured source image. `ai_generated` means a fully synthetic image with no authentic source image.
+- Mixed, composited, face-swapped, AI-enhanced, or otherwise AI-edited images are excluded rather than mapped into either class.
 
 ### 4.2 Robustness Requirement
 Must maintain reasonable accuracy after realistic post-processing:
@@ -56,22 +55,42 @@ Must maintain reasonable accuracy after realistic post-processing:
 | Color Jitter | brightness/contrast/sat ±20% | Filter apps, auto-enhance |
 | Center Crop | crop 80% | Profile-picture cropping |
 
+Each transformed test sample is created directly from its clean source with **exactly one transform and one parameter setting**. Transformations must not be chained, mixed, composited, or overlaid. For example, the JPEG-50 set contains JPEG-50 only, not JPEG-50 followed by resize or blur.
+
 The product must not silently fail by defaulting to "real" when a transform destroys its detection signal — this failure mode must be measured and reported, not hidden.
 
 ### 4.3 Deliverable JSON Contract
 ```
-{"image_path": "img001.jpg", "pred": 0.12, "category": "real_face_swapped", "category_confidence": 0.77}
+{"image_path": "img001.jpg", "pred": 0.12}
 ```
-Only `image_path` and `pred` are strictly required by the challenge spec; `category` / `category_confidence` are bonus fields. Internal-only diagnostic fields (e.g. `verdict_source`, degradation-bias metrics) must **not** appear in the public JSON.
+`image_path` and `pred` are the public contract. Internal-only diagnostic fields (e.g. `verdict_source` and degradation-bias metrics) must **not** appear in the public JSON.
 
 ### 4.4 Evaluation & Reporting Requirements
 - **Robustness Evaluation Summary** — clean vs. transformed performance, split by real-accuracy (R.Acc.) and fake-accuracy (F.Acc.) per transform, so any "predicts real under degradation" bias is directly visible rather than hidden in an aggregate number.
+- **Independent transform rows** — every transform and parameter setting is evaluated from the clean source; no row may contain multiple transformations.
 - **Generator generalization table** — held-out generator family, evaluated on a JPEG/resolution-matched dataset so the eval measures genuine generalization, not compression/resolution bias.
-- **5-way confusion matrix** for real-subclass discrimination.
-- **Calibration table** — Expected Calibration Error (ECE) per class, on both clean and transformed validation data.
+- **Binary confusion matrix** for `authentic` versus `ai_generated`.
+- **Calibration table** — Expected Calibration Error (ECE) for both binary labels, on clean and independently transformed validation data.
+- **PRNU ablation** — compare CLIP-only, PRNU-only, and fused predictions on clean data and every independent transformation row.
+- **Texture ablation** — compare global CLIP, texture-only, CLIP + texture, CLIP + PRNU, and full fusion on clean data and every independent transformation row.
+- **Color/optics ablation** — compare RGB versus Lab correlation features, chromatic-aberration and radial-distortion coverage, feature-only discrimination, and incremental value in the full fused model for every transform row.
+- **Frequency-family matrix** — report frequency-only performance and fast-track coverage by known generator/decoder family and independent transform. Include a held-out family test and an `unknown` metadata bucket.
 - **Error Analysis Note** — representative false positives/negatives and stated trade-offs.
 
-### 4.5 Non-Functional Requirements
+### 4.5 Scoring
+
+The final evaluation score is split evenly:
+
+| Component | Weight | Definition |
+|---|---:|---|
+| Accuracy | 50% | Binary accuracy on the clean test set |
+| Robustness | 50% | Mean binary accuracy across all independent transform-and-parameter test sets |
+
+`Final score = 0.50 × clean accuracy + 0.50 × mean independent-transform accuracy`.
+
+R.Acc. and F.Acc. must still be reported beside each aggregate so class-specific collapse cannot be hidden by the final score.
+
+### 4.6 Non-Functional Requirements
 - Local, memory- and space-efficient: minimize simultaneously-loaded models at inference time.
 - Deliberate, explainable architectural decisions over maximal complexity.
 - Iterative improvement mechanism (self-training loop) demonstrated over multiple cycles with measurable results, not just a one-shot model.
@@ -83,23 +102,27 @@ Only `image_path` and `pred` are strictly required by the challenge spec; `categ
 4. **Robustness Evaluation Summary** (table/visual, clean vs. transformed).
 5. **Error Analysis Note** (false positives/negatives, trade-offs).
 
-## 6. Judging Criteria & Weights
+## 6. Evaluation Weights
 
-| Criteria | Weight | What it rewards |
-|---|---|---|
-| Technical Execution | 35% | Well-structured code, thoughtful architecture, reliable demo, deliberate complexity |
-| Innovation & Problem Insight | 20% | Original framing, sharp understanding of *why* the problem is hard |
-| Impact & Relevance | 20% | Real-world value beyond the hackathon prompt |
-| Feasibility & Practicality | 15% | Realistic, buildable, resource-proportionate |
-| Presentation & Communication | 10% | Clear storytelling, ability to field questions |
+Model evaluation is weighted **50% accuracy and 50% robustness**, using the formula in Section 4.5. Other qualitative judging considerations may shape the presentation, but they do not replace this model-scoring split.
 
 ## 7. Open Product Questions
 - Whether to expose `verdict_source` (c2pa / frequency / model) as a visible Table 1 breakdown for judges, even though it's not part of the required JSON.
 - How to demonstrate the C2PA early-exit mechanism given that none of the reference training datasets are known to carry intact C2PA manifests (requires a small self-synthesized demo set).
-- How much of the self-training / specialist-disagreement machinery to actually build out live vs. describe as a designed-but-time-boxed mechanism, given hackathon time constraints.
+- Whether the single-image PRNU-coherence proxy adds measurable value after fusion, especially outside the clean and crop conditions.
+- How much of the self-training machinery to build live versus describe as a designed-but-time-boxed mechanism, given hackathon time constraints.
 
 ## 8. Known Gaps / Risks Called Out for Follow-up
 - **Error analysis mechanics**: need a concrete script to pull top-10 false positives/negatives; decide whether this is reflected in the UI/demo and how human verification confirms "true" detection rate.
 - **Error handling**: no defined baseline yet for minimum image resolution or corruption detection (garbage-in handling).
-- **`real_ai_enhanced` (AI-enhancement) class**: confirmed as a genuine open gap in the field — no general packaged detector exists, especially for non-face upscaling/denoise. This is the project's highest-novelty and highest-risk deliverable.
-- **Face-swap dataset licensing** (FaceForensics++, Celeb-DF) requires registration — flagged as the most likely Day-1 external bottleneck.
+- **Dataset provenance**: each sample must be screened so mixed, AI-edited, or ambiguous-origin images do not enter either binary class.
+- **PRNU limitation**: without multiple images from a known camera, the system cannot estimate or verify a device fingerprint. Its single-image coherence score is experimental evidence, not proof that an image is authentic.
+- **Transformation fragility**: JPEG, blur, resize, and added noise can severely weaken PRNU. Missing PRNU must never independently produce an `ai_generated` verdict, and PRNU must never act as an early-exit gate.
+- **DSNU**: considered but deprioritized because reliable isolation normally needs dark-frame/reference calibration, while correction pipelines can suppress the signal. An exported single image provides neither the required reference nor a dependable residual.
+- **Texture shortcut risk**: absolute smoothness, edge density, OCR confidence, or any fixed threshold can confuse degraded authentic images with synthetic images. Texture evidence must be learned under independently transformed training copies and can never override the binary model by rule.
+- **Signal redundancy**: texture, frequency, and PRNU paths may capture overlapping low-level artifacts. Ablations must show that each retained path adds value to the locked 50/50 score.
+- **Color-space limitation**: per-channel normalization can reduce sensitivity to affine brightness/contrast changes, but Lab conversion does not make the cue invariant to saturation or general color jitter. RGB and Lab must both be tested.
+- **Optics limitation**: chromatic aberration and radial lens distortion may be weak, corrected by the camera pipeline, simulated by a generator, or unobservable in scenes without enough edge/line support. Missing or low-confidence estimates are neutral, never evidence of either class.
+- **Color-jitter alignment**: authentic and AI-generated training samples must use the same jitter parameter distribution and sampling policy so jitter itself cannot become a label shortcut.
+- **Spectral-family limitation**: checkerboards, spectral replicas, periodic autocorrelation, and high-frequency decay are architecture/decoder dependent and can be mitigated or erased. A frequency detector tuned to one generator family must not be presented as universal.
+- **Autoregressive uncertainty**: token-based generators may inherit artifacts from their tokenizer or VAE/VQ decoder, but no single natural autoregressive spectral signature is assumed. They require their own held-out evaluation.
