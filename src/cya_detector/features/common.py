@@ -10,6 +10,9 @@ from typing import Any
 import numpy as np
 
 
+_LUMA_WEIGHTS = np.asarray([0.299, 0.587, 0.114], dtype=np.float64)
+
+
 @dataclass(frozen=True)
 class AuxiliaryFeatureResult:
     names: tuple[str, ...]
@@ -48,3 +51,11 @@ def validate_result(result: AuxiliaryFeatureResult) -> AuxiliaryFeatureResult:
     if any(not 0.0 <= value <= 1.0 for value in result.confidence.values()):
         raise ValueError("Auxiliary confidence must be in [0, 1]")
     return result
+
+
+def to_grayscale(image: np.ndarray) -> np.ndarray:
+    """Convert an RGB array to grayscale for deterministic texture selection."""
+
+    if image.ndim != 3 or image.shape[-1] < 3:
+        raise ValueError("Expected an RGB image array")
+    return np.asarray(image[..., :3], dtype=np.float64) @ _LUMA_WEIGHTS
