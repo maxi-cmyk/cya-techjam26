@@ -1,4 +1,4 @@
-.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots
+.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture
 
 DATA_ROOT ?= /content/hackathon_data
 ARTIFACT_ROOT ?= artifacts
@@ -23,6 +23,12 @@ smoke-bootstrap:
 
 test:
 	PYTHONPATH=src python -m unittest discover -s tests -v
+
+task3-test:
+	PYTHONPATH=src python -m unittest tests.test_benchmark_transforms tests.test_transform_materialization tests.test_preprocessing tests.test_controlled_sampler tests.test_safe_transforms -v
+
+task3-fixture:
+	python scripts/materialize_transforms.py --input-manifest $(ARTIFACT_ROOT)/task2/fixed_q96_manifest.csv --output-root $(ARTIFACT_ROOT)/task3/variants --output-manifest $(ARTIFACT_ROOT)/task3/transform_manifest.csv --report $(ARTIFACT_ROOT)/task3/transform_report.json --config configs/colab.json
 
 task2-source-audit:
 	python scripts/build_source_manifest.py --dataset-root $(DATA_ROOT)/raw/sid_set --manifest $(ARTIFACT_ROOT)/task2/source_manifest.csv --report $(ARTIFACT_ROOT)/task2/source_audit.json --expected-csv-rows 20000

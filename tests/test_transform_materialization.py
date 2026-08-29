@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -271,6 +273,80 @@ class TransformMaterializationTests(unittest.TestCase):
 
         self.assertFalse((self.root / "variants.csv").exists())
         self.assertFalse((self.root / "report.json").exists())
+
+    def test_cli_materializes_selected_declared_cells_and_prints_summary(self) -> None:
+        output_root = self.root / "cli-variants"
+        output_manifest = self.root / "cli-variants.csv"
+        report_path = self.root / "cli-report.json"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/materialize_transforms.py",
+                "--input-manifest",
+                str(self.manifest),
+                "--output-root",
+                str(output_root),
+                "--output-manifest",
+                str(output_manifest),
+                "--report",
+                str(report_path),
+                "--config",
+                str(CONFIG_PATH),
+                "--cells",
+                "resize_scale_0.5,noise_sigma_0.02",
+                "--overwrite",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(read_manifest(output_manifest)), 4)
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            report["cell_counts"],
+            {"noise_sigma_0.02": 2, "resize_scale_0.5": 2},
+        )
+        self.assertIn("Materialized 4 images", result.stdout)
+        self.assertIn('"noise_sigma_0.02": 2', result.stdout)
+        self.assertIn('"resize_scale_0.5": 2', result.stdout)
+        self.assertIn(f"Manifest: {output_manifest.resolve()}", result.stdout)
+        self.assertIn(f"Report: {report_path.resolve()}", result.stdout)
+
+    def test_cli_rejects_undeclared_cell_before_writing_outputs(self) -> None:
+        output_root = self.root / "unknown-variants"
+        output_manifest = self.root / "unknown-variants.csv"
+        report_path = self.root / "unknown-report.json"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "scripts/materialize_transforms.py",
+                "--input-manifest",
+                str(self.manifest),
+                "--output-root",
+                str(output_root),
+                "--output-manifest",
+                str(output_manifest),
+                "--report",
+                str(report_path),
+                "--config",
+                str(CONFIG_PATH),
+                "--cells",
+                "resize_scale_0.5,not_declared",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Unknown benchmark cell IDs: not_declared", result.stderr)
+        self.assertFalse(output_root.exists())
+        self.assertFalse(output_manifest.exists())
+        self.assertFalse(report_path.exists())
 
 
 if __name__ == "__main__":
