@@ -12,6 +12,8 @@
   },
   "paths": {
     "drive_root": "/content/drive/MyDrive",
+    "drive_folder_id": "1c-IVvAiHlApA49CtU3QQH9XqQDmkbO8U",
+    "drive_folder_url": "https://drive.google.com/drive/folders/1c-IVvAiHlApA49CtU3QQH9XqQDmkbO8U",
     "drive_data_root": "/content/drive/MyDrive/hackathon_data",
     "local_data_root": "/content/hackathon_data",
     "local_project_root": "/content/cya-techjam26",
@@ -82,4 +84,3 @@
     "final_test_locked": true
   }
 }
-

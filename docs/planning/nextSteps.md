@@ -11,6 +11,8 @@ Build the detector in evidence-gated milestones: first make the data and evaluat
 
 Google Colab is the primary training runtime. Google Drive is durable storage; the Colab VM's `/content` filesystem is disposable, faster working storage.
 
+The supplied dataset folder is `https://drive.google.com/drive/folders/1c-IVvAiHlApA49CtU3QQH9XqQDmkbO8U`. Before the first session, add it as a shortcut at `My Drive/hackathon_data`. The folder ID is recorded in `configs/colab.json`, while the mounted runtime consumes the stable shortcut path.
+
 Expected paths are frozen in `configs/colab.json`:
 
 ```text
