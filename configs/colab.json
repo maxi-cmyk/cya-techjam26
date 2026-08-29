@@ -88,6 +88,22 @@
     "max_analysis_size": 1024,
     "workers": 4
   },
+  "auxiliary": {
+    "extractor_version": "auxiliary-v1",
+    "color_window_size": 64,
+    "low_variance_epsilon": 0.0001,
+    "prnu_block_size": 64,
+    "prnu_denoise_sigma": 1.0,
+    "prnu_min_dimension": 128,
+    "optics_min_dimension": 256,
+    "ca_scale_limit": 0.006,
+    "ca_scale_steps": 13,
+    "ca_min_edge_fraction": 0.02,
+    "max_analysis_size": 1024,
+    "optics_max_analysis_size": 512,
+    "max_eligibility_rate_gap": 0.05,
+    "workers": 4
+  },
   "optimization": {
     "loss": "bce_with_logits",
     "optimizer": "adamw",

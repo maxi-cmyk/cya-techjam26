@@ -21,6 +21,7 @@ REQUIRED_SECTIONS = {
     "benchmark_transforms",
     "features",
     "frequency",
+    "auxiliary",
     "optimization",
     "evaluation",
 }
@@ -97,6 +98,27 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("Frequency max_analysis_size must be at least 32")
     if frequency.get("workers", 0) <= 0:
         raise ConfigError("Frequency workers must be positive")
+
+    auxiliary = config["auxiliary"]
+    if not auxiliary.get("extractor_version"):
+        raise ConfigError("Auxiliary extractor version is required")
+    for name in ("color_window_size", "prnu_block_size", "prnu_min_dimension", "optics_min_dimension"):
+        if auxiliary.get(name, 0) < 16:
+            raise ConfigError(f"Auxiliary {name} must be at least 16")
+    if auxiliary.get("low_variance_epsilon", 0) <= 0:
+        raise ConfigError("Auxiliary low_variance_epsilon must be positive")
+    if auxiliary.get("prnu_denoise_sigma", 0) <= 0:
+        raise ConfigError("Auxiliary PRNU denoise sigma must be positive")
+    if auxiliary.get("ca_scale_limit", 0) <= 0 or auxiliary.get("ca_scale_steps", 0) < 3:
+        raise ConfigError("Auxiliary CA scale search is invalid")
+    if not 0.0 <= auxiliary.get("ca_min_edge_fraction", -1) <= 1.0:
+        raise ConfigError("Auxiliary CA edge fraction must be in [0, 1]")
+    if auxiliary.get("max_analysis_size", 0) < 32 or auxiliary.get("optics_max_analysis_size", 0) < 32:
+        raise ConfigError("Auxiliary analysis sizes must be at least 32")
+    if not 0.0 <= auxiliary.get("max_eligibility_rate_gap", -1) <= 1.0:
+        raise ConfigError("Auxiliary eligibility gap must be in [0, 1]")
+    if auxiliary.get("workers", 0) <= 0:
+        raise ConfigError("Auxiliary workers must be positive")
 
     model = config["model"]
     if model.get("freeze_backbone") is not True:

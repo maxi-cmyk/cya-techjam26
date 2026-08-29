@@ -1,4 +1,4 @@
-.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare
+.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare
 
 DATA_ROOT ?= /content/hackathon_data
 ARTIFACT_ROOT ?= artifacts
@@ -78,3 +78,14 @@ task7-train:
 
 task7-compare:
 	python scripts/compare_frequency_variants.py --task7-root $(ARTIFACT_ROOT)/task7 --output $(ARTIFACT_ROOT)/task7/variant_comparison.json
+
+AUXILIARY_VARIANT ?= rgb
+
+task8-extract:
+	python scripts/extract_auxiliary_features.py --manifest $(ARTIFACT_ROOT)/task2/fixed_q96_manifest.csv --output $(ARTIFACT_ROOT)/task8/auxiliary_features.csv --report $(ARTIFACT_ROOT)/task8/extraction_report.json --cache-root /content/auxiliary_feature_cache --matching-policy fixed_q96
+
+task8-train:
+	python scripts/train_auxiliary_baseline.py --features $(ARTIFACT_ROOT)/task8/auxiliary_features.csv --output $(ARTIFACT_ROOT)/task8/$(AUXILIARY_VARIANT)/seed_$(TASK4_SEED) --variant $(AUXILIARY_VARIANT) --seed $(TASK4_SEED)
+
+task8-compare:
+	python scripts/compare_color_variants.py --task8-root $(ARTIFACT_ROOT)/task8 --output $(ARTIFACT_ROOT)/task8/color_comparison.json

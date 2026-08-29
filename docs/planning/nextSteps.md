@@ -152,7 +152,7 @@ Task 5 clean reports for both policies and all three seeds were generated and co
 
 The verified T4 run extracted layers 6/12/18/24 for 1,390 fixed-Q96 images in 39.6 seconds at 35.1 images/second and approximately 1.77 GB peak GPU allocation. Across seeds 42/43/44, RINE reached 99.39% mean clean accuracy versus Stage A's 97.58%, with +2.63-point authentic and +1.12-point AI-generated mean accuracy changes. The provisional clean decision is `retain`; the final decision remains pending Task 3's robustness cells and the locked 50/50 score.
 
-[ ] **Task 7 — Implement deterministic Stage 1 frequency features** *(implementation complete; Colab baseline pending)*
+[x] **Task 7 — Implement deterministic Stage 1 frequency features** *(clean family decision verified; robustness/fusion waits for Task 3)*
 
   - [x] Extract FFT/DCT log-magnitude summaries, radial/angular power, periodic-peak prominence, residual autocorrelation, and local neighboring-pixel dependencies.
   - [x] Keep generator/checkpoint/source metadata as evaluation strata rather than prediction targets.
@@ -161,19 +161,22 @@ The verified T4 run extracted layers 6/12/18/24 for 1,390 fixed-Q96 images in 39
   - [x] Implement paired magnitude-versus-phase comparison; JPEG and resize rows wait for Task 3.
   - [x] Audit the strongest correlations with file size, dimensions, and normalization quality on `seed_train`.
   - [x] Keep the Stage 1 early exit disabled in configuration and training; any future early-exit claim still requires locked precision, confidence, coverage, authentic, held-out-family, and transform gates.
-  - [ ] Run `04_frequency_stage1.ipynb` and record the clean representation decision across seeds 42/43/44.
-  - [ ] Complete when frequency-only and incremental-fusion tables support a keep/drop decision and the default inference path still falls through to Stage 2.
+  - [x] Run `04_frequency_stage1.ipynb` and record the clean representation decision across seeds 42/43/44.
+  - [x] Complete the clean frequency-only decision while keeping the default inference path falling through to Stage 2; incremental fusion remains a Task 3 integration item.
 
-[ ] **Task 8 — Add auxiliary feature families one at a time**
+The verified CPU run completed all six representation/seed combinations. Magnitude plus residual features reached 83.03% mean clean accuracy versus 80.00% with bounded phase added. The phase features were dropped, magnitude is the retained clean representation, `final_test` remained sealed, and the Stage 1 early exit remained disabled.
 
-  - [ ] Implement RGB/Lab global and local standardized inter-channel correlations with low-variance masks, coverage, and numerical guards.
-  - [ ] Implement the single-image PRNU-coherence residual summaries as an experimental proxy; do not present it as camera identification.
-  - [ ] Implement radial chromatic-aberration fitting with support/confidence and optional radial-distortion fitting only on eligible scenes.
-  - [ ] Derive eligibility from native dimensions, provenance/processing history, and extractor support; do not infer physical-signal eligibility from resolution alone.
-  - [ ] Mark the resized/recompressed SID cleaned set ineligible for native PRNU/optics claims unless a separate validation proves signal preservation.
-  - [ ] Normalize each family on `seed_train`, zero-fill only after normalization, and always pair missing values with an explicit mask.
+[ ] **Task 8 — Add auxiliary feature families one at a time** *(extractors and guarded clean launcher implemented; Colab run pending)*
+
+  - [x] Implement RGB/Lab global and local standardized inter-channel correlations with low-variance masks, coverage, and numerical guards.
+  - [x] Implement the single-image PRNU-coherence residual summaries as an experimental proxy; do not present it as camera identification.
+  - [x] Implement radial chromatic-aberration fitting with support/confidence; radial distortion remains deferred until eligible line/arc support exists.
+  - [x] Derive label-independent eligibility from native dimensions and `source_original` provenance rather than resolution alone.
+  - [x] Mark matched/recompressed SID views ineligible for native PRNU/optics claims.
+  - [x] Normalize each physical family on valid/eligible `seed_train` rows, zero-fill only after normalization, and pair missing values with eligibility, validity, and confidence masks.
   - [ ] Train only each family projection and the fusion head while CLIP remains frozen; run RGB-only, Lab-only, PRNU-only, CA-only, eligible-distortion-only, and incremental-fusion ablations.
-  - [ ] Audit feature missingness, validity, and confidence by label, dataset, and transform so they cannot become label shortcuts.
+  - [x] Audit feature eligibility, validity, and confidence counts by label/split and refuse physical-family fitting when eligibility is absent or class-imbalanced.
+  - [ ] Run `05_auxiliary_stage_c.ipynb` for RGB, Lab, and combined color baselines across seeds 42/43/44.
   - [ ] Complete when every family has a documented physical limitation, coverage report, latency measurement, and locked keep/drop decision.
 
 [ ] **Task 9 — Add the texture-aware local-detail path under a fixed budget**

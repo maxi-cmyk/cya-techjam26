@@ -54,6 +54,12 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             validate_config(candidate)
 
+    def test_auxiliary_eligibility_gap_must_be_bounded(self) -> None:
+        candidate = copy.deepcopy(self.config)
+        candidate["auxiliary"]["max_eligibility_rate_gap"] = 1.1
+        with self.assertRaises(ConfigError):
+            validate_config(candidate)
+
 
 if __name__ == "__main__":
     unittest.main()
