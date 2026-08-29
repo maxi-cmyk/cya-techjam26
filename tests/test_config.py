@@ -64,6 +64,33 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "mutually exclusive"):
             validate_config(config)
 
+    def test_controlled_training_fractions_remain_50_50(self) -> None:
+        candidate = copy.deepcopy(self.config)
+        candidate["training_policy"]["controlled"]["clean_fraction"] = 0.2
+        candidate["training_policy"]["controlled"]["transformed_fraction"] = 0.8
+        with self.assertRaises(ConfigError):
+            validate_config(candidate)
+
+    def test_controlled_training_requires_label_balancing(self) -> None:
+        candidate = copy.deepcopy(self.config)
+        candidate["training_policy"]["controlled"]["balance_labels"] = False
+        with self.assertRaises(ConfigError):
+            validate_config(candidate)
+
+    def test_controlled_training_requires_uniform_transform_cells(self) -> None:
+        candidate = copy.deepcopy(self.config)
+        candidate["training_policy"]["controlled"]["uniform_transform_cells"] = False
+        with self.assertRaises(ConfigError):
+            validate_config(candidate)
+
+    def test_training_policy_enabled_fields_must_be_booleans(self) -> None:
+        for policy_name in ("controlled", "safe"):
+            with self.subTest(policy=policy_name):
+                candidate = copy.deepcopy(self.config)
+                candidate["training_policy"][policy_name]["enabled"] = "true"
+                with self.assertRaises(ConfigError):
+                    validate_config(candidate)
+
     def test_task3_provenance_fields_are_frozen(self) -> None:
         for field in (
             "parent_sha256",

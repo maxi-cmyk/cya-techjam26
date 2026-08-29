@@ -101,15 +101,23 @@ def validate_config(config: dict[str, Any]) -> None:
     training_policy = config["training_policy"]
     controlled = training_policy.get("controlled", {})
     safe = training_policy.get("safe", {})
+    if not isinstance(controlled.get("enabled"), bool) or not isinstance(
+        safe.get("enabled"), bool
+    ):
+        raise ConfigError("Training policy enabled fields must be booleans")
     if controlled.get("enabled") == safe.get("enabled"):
         raise ConfigError("Training policies must be mutually exclusive")
 
-    clean_fraction = controlled.get("clean_fraction")
-    transformed_fraction = controlled.get("transformed_fraction")
-    if clean_fraction is None or transformed_fraction is None or abs(
-        clean_fraction + transformed_fraction - 1.0
-    ) > 1e-9:
-        raise ConfigError("Controlled training fractions must sum to 1.0")
+    if (
+        controlled.get("clean_fraction") != 0.5
+        or controlled.get("transformed_fraction") != 0.5
+    ):
+        raise ConfigError("Controlled training fractions must remain 50/50")
+
+    if controlled.get("balance_labels") is not True:
+        raise ConfigError("Controlled training must balance labels")
+    if controlled.get("uniform_transform_cells") is not True:
+        raise ConfigError("Controlled training must sample transform cells uniformly")
 
     for name in (
         "horizontal_flip_probability",
