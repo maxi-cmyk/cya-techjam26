@@ -7,24 +7,65 @@ Build the detector in evidence-gated milestones: first make the data and evaluat
 - In: binary authentic-versus-fully-synthetic classification; data manifests and leakage controls; independent robustness transforms; frozen CLIP/RINE training; deterministic frequency, texture, PRNU, color, and optics ablations; calibration; C2PA synthetic early exit; local directory inference; reproducible metrics and reports.
 - Out: mixed or AI-edited images, face swaps, localization, chained evaluation transforms, online APIs in the inference path, concurrent service infrastructure, and production deployment.
 
+## Google Colab and Drive workflow
+
+Google Colab is the primary training runtime. Google Drive is durable storage; the Colab VM's `/content` filesystem is disposable, faster working storage.
+
+Expected paths are frozen in `configs/colab.json`:
+
+```text
+/content/drive/MyDrive/hackathon_data              immutable and cleaned data in Drive
+/content/drive/MyDrive/cya-techjam26/artifacts     persistent checkpoints and metrics
+/content/cya-techjam26                             remote runtime repository checkout
+/content/hackathon_data                            active local dataset copy
+/content/cya-techjam26/artifacts                   active local run outputs
+```
+
+At the start of every Colab session:
+
+1. Open a notebook through the official VS Code Colab extension and select **Kernel -> Colab -> Auto Connect**.
+2. Select a GPU runtime, then use **Colab: Mount Google Drive to Server...** or run:
+
+   ```python
+   from google.colab import drive
+   drive.mount("/content/drive")
+   ```
+
+3. Clone the repository into `/content/cya-techjam26`, or pull the existing disposable checkout. Local VS Code files are not assumed to exist on the remote runtime.
+4. Install without replacing Colab's matched PyTorch/CUDA build:
+
+   ```bash
+   cd /content/cya-techjam26
+   make install-colab
+   ```
+
+5. Copy the active dataset archive/subset from Drive to `/content/hackathon_data` and extract it locally. Do not train by repeatedly reading thousands of small images from the mounted Drive folder.
+6. Run `make smoke`. Do not begin extraction or training unless configuration, imports, and CUDA checks pass.
+7. Keep embeddings, feature caches, temporary transforms, and frequent logs under `/content` during the run.
+8. Copy completed checkpoints, resolved configuration, metrics, environment metadata, and reports to the Drive artifact path. Copy rather than move so an interrupted Drive operation cannot remove the local result.
+
+Every notebook remains a thin launcher for versioned modules in `src/`. A runtime reset requires rerunning installation, local data staging, and smoke checks; durable artifacts already copied to Drive survive the reset.
+
 ## Action items
 
-[ ] **Task 1 — Create the project skeleton and freeze shared configuration**
+[x] **Task 1 — Create the project skeleton and freeze shared configuration**
 
-  - [ ] Add `src/`, `scripts/`, `configs/`, `tests/`, and `artifacts/` boundaries without committing downloaded images, caches, or checkpoints.
-  - [ ] Define one versioned configuration schema for paths, seeds, model identifier/input size, preprocessing, transform cells, feature flags, optimization, and evaluation thresholds.
-  - [ ] Add environment/dependency files for PyTorch, torchvision, the CLIP loader, OpenCV, NumPy/SciPy, pandas, scikit-learn, Pillow, scikit-image, and C2PA bindings.
-  - [ ] Add ignore rules for datasets, feature caches, run outputs, model weights, secrets, and notebook checkpoints.
-  - [ ] Record package versions, Git commit, resolved configuration, and random seed in every future run directory.
-  - [ ] Define a minimal smoke command that loads the configuration and checks CPU/GPU availability without downloading or training anything.
-  - [ ] Complete when a fresh environment can validate the configuration and import the planned stack.
+  - [x] Add `src/`, `scripts/`, `configs/`, `tests/`, `notebooks/`, and `artifacts/` boundaries without committing downloaded images, caches, or checkpoints.
+  - [x] Define schema-versioned `configs/colab.json` for paths, seed, CLIP identifier/input size, preprocessing, exact transform cells, feature flags, optimization, and evaluation thresholds.
+  - [x] Add full, Colab-safe, and development dependency files covering PyTorch, torchvision, Transformers CLIP, OpenCV, NumPy/SciPy, pandas, scikit-learn, Pillow, scikit-image, and C2PA bindings.
+  - [x] Add ignore rules for datasets, feature caches, run outputs, model weights, secrets, and notebook checkpoints.
+  - [x] Add run metadata helpers that record package versions, Git commit, resolved configuration, platform, Python version, timestamp, and seed.
+  - [x] Add `make smoke` for strict installed-environment validation and `make smoke-bootstrap` for dependency-free repository/configuration validation.
+  - [x] Add configuration and metadata unit tests plus a Colab notebook workflow note.
+
+Task 1 implementation is complete. The first connected Colab GPU session must still run `make install-colab`, `make smoke`, and record the assigned accelerator before Task 2 data work begins.
 
 [ ] **Task 2 — Reconcile the supplied SID data with the agreed dataset contract**
 
   - [ ] Preserve `hackathon_data/raw/sid_set/` as immutable source bytes and verify the reported 20,000-image inventory, labels, corruption results, and exact-duplicate findings.
   - [ ] Keep only `real` and `full_synthetic`; assert that SID label `2` and all mixed/tampered/ambiguous rows are absent.
   - [ ] Treat the existing `cleaned/sid_set/` 336×336 set as a smoke-test artifact, not automatically as the canonical training view: its real-only recompression is label-dependent and its resize may remove native low-level evidence.
-  - [ ] Build a manifest containing stable `source_id`, hashes, label, source path, dimensions, format, generator metadata when available, processing history, and feature-eligibility fields from [training.md](training.md).
+  - [ ] Build a manifest containing stable `source_id`, hashes, label, source path, dimensions, format, generator metadata when available, processing history, and feature-eligibility fields from [training.md](../training/training.md).
   - [ ] Run exact and perceptual duplicate checks before splitting; group all duplicates and all derivatives of one source together.
   - [ ] Create canonical matched-clean derivatives from the immutable originals using the same encoder, quality distribution, chroma subsampling, color conversion, and metadata policy for both labels.
   - [ ] Compare fixed Q96 with Q95–Q100 using nuisance-only audits; freeze the policy before model comparison.
@@ -124,6 +165,4 @@ Build the detector in evidence-gated milestones: first make the data and evaluat
 
 ## Open questions
 
-- Which exact CLIP checkpoint/input size should be frozen first: ViT-L/14@336 as currently designed, or a 224-pixel variant that better matches the supplied SAFE crop example and lowers compute?
-- Can the untouched `hackathon_data/raw/sid_set/` bytes be made available to every trainer, or must the first baseline use the existing 336×336 cleaned handoff while the canonical dataset is rebuilt elsewhere?
 - Should the primary training policy remain clean-or-one-controlled-transform, with SAFE strictly an ablation as recommended here, or should SAFE become the default training-only composite policy after the Stage A comparison?

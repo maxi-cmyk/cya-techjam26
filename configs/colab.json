@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "project": {
+    "name": "cya-techjam26",
+    "task": "binary_ai_generated_image_detection"
+  },
+  "runtime": {
+    "platform": "google_colab",
+    "seed": 42,
+    "deterministic_algorithms": true,
+    "mixed_precision": "auto"
+  },
+  "paths": {
+    "drive_root": "/content/drive/MyDrive",
+    "drive_data_root": "/content/drive/MyDrive/hackathon_data",
+    "local_data_root": "/content/hackathon_data",
+    "local_project_root": "/content/cya-techjam26",
+    "local_artifact_root": "/content/cya-techjam26/artifacts",
+    "drive_artifact_root": "/content/drive/MyDrive/cya-techjam26/artifacts"
+  },
+  "dataset": {
+    "name": "sid_set",
+    "labels": ["authentic", "ai_generated"],
+    "excluded_labels": ["tampered", "mixed", "ai_edited", "ambiguous"],
+    "manifest_version": 1
+  },
+  "model": {
+    "identifier": "openai/clip-vit-large-patch14-336",
+    "input_size": 336,
+    "freeze_backbone": true,
+    "output": "p_ai_generated"
+  },
+  "preprocessing": {
+    "input_policy": "crop",
+    "train_crop_size": 336,
+    "validation_crop_size": 336,
+    "small_image_policy": "pad_then_crop",
+    "matched_clean": {
+      "enabled": true,
+      "candidate_quality_policies": ["fixed_q96", "uniform_q95_q100"],
+      "label_independent": true
+    }
+  },
+  "benchmark_transforms": {
+    "allow_chaining": false,
+    "jpeg_quality": [90, 70, 50, 30],
+    "gaussian_blur_sigma": [0.5, 1.0, 2.0],
+    "resize_scale": [0.5, 0.25],
+    "gaussian_noise_sigma": [0.02, 0.05, 0.1],
+    "color_jitter_fraction": 0.2,
+    "center_crop_fraction": 0.8
+  },
+  "features": {
+    "rine": false,
+    "frequency": false,
+    "texture": false,
+    "prnu_coherence": false,
+    "rgb_correlation": false,
+    "lab_correlation": false,
+    "chromatic_aberration": false,
+    "radial_distortion": false,
+    "frequency_fast_track": false
+  },
+  "optimization": {
+    "loss": "bce_with_logits",
+    "optimizer": "adamw",
+    "head_learning_rate": 0.001,
+    "fusion_learning_rate": 0.0003,
+    "backbone_learning_rate": 0.00001,
+    "weight_decay": 0.0001,
+    "effective_batch_size": 32,
+    "warmup_fraction": 0.05,
+    "gradient_clip_norm": 1.0,
+    "max_head_epochs": 20,
+    "early_stopping_patience": 3
+  },
+  "evaluation": {
+    "clean_weight": 0.5,
+    "robustness_weight": 0.5,
+    "threshold": 0.5,
+    "calibration": "temperature_scaling_clean_selection_val",
+    "final_test_locked": true
+  }
+}
+
