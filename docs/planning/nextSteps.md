@@ -48,6 +48,26 @@ At the start of every Colab session:
 
 Every notebook remains a thin launcher for versioned modules in `src/`. A runtime reset requires rerunning installation, local data staging, and smoke checks; durable artifacts already copied to Drive survive the reset.
 
+## Dependencies and parallel teammate tracks
+
+Tasks are ordered by integration dependency, but implementation does not have to be fully sequential. Teammates should own separate module paths to avoid merge conflicts.
+
+| Workstream | Can start | Hard dependency before integration | Can run alongside | Suggested ownership boundary |
+|---|---|---|---|---|
+| Task 2 data contract | Now | Task 1 complete | Tasks 3, 5, and standalone parts of 4/7/8/9 | `src/cya_detector/data/`, Task 2 scripts/notebook |
+| Task 3 transform engine | Now | Frozen config/schema from Task 1 | Tasks 2 and 5 | `src/cya_detector/transforms/`, transform tests |
+| Task 4 CLIP loader/head skeleton | Now | Real training waits for Tasks 2 and 3 | Tasks 2, 3, and 5 | `src/cya_detector/models/clip_baseline.py` |
+| Task 5 evaluation harness | Now, using fixtures | Real tables wait for Tasks 2–4 | Tasks 2, 3, 4, and feature extraction | `src/cya_detector/evaluation/`, reporting tests |
+| Task 7 frequency extraction | Now, using fixtures | Fusion/retention waits for Tasks 4 and 5 | Tasks 2, 3, 5, 8, and 9 | `src/cya_detector/features/frequency.py` |
+| Task 8 color features | Now, using fixtures | Fusion/retention waits for Tasks 4 and 5 | Frequency, PRNU, optics, and texture tracks | `src/cya_detector/features/color.py` |
+| Task 8 PRNU features | Now, using fixtures | Physical claims wait for Task 2 native-data audit | Frequency, color, optics, and texture tracks | `src/cya_detector/features/prnu.py` |
+| Task 8 optical features | Now, using fixtures | Physical claims wait for Task 2 eligibility audit | Frequency, color, PRNU, and texture tracks | `src/cya_detector/features/optics.py` |
+| Task 9 patch selector | Now, using fixtures | Learned aggregation waits for Task 4 | Tasks 2, 3, 5, 7, and 8 | `src/cya_detector/features/texture.py` |
+| Task 6 RINE integration | After Stage A runs | Tasks 4 and 5 | Later auxiliary fusion experiments | `src/cya_detector/models/rine.py` |
+| Task 10 packaging | After feature retention | Selected outputs from Tasks 4–9 | Documentation/demo preparation only | inference CLI, calibration, release tests |
+
+Safe work available immediately for other teammates: Task 3, Task 5, the Task 4 model-loader skeleton, Task 7 deterministic extraction, and the separate Task 8/9 extractor modules. Do not start real model selection, calibration, or final-test evaluation until the required upstream gates pass.
+
 ## Action items
 
 [x] **Task 1 — Create the project skeleton and freeze shared configuration**
@@ -62,17 +82,21 @@ Every notebook remains a thin launcher for versioned modules in `src/`. A runtim
 
 Task 1 implementation is complete. The first connected Colab GPU session must still run `make install-colab`, `make smoke`, and record the assigned accelerator before Task 2 data work begins.
 
-[ ] **Task 2 — Reconcile the supplied SID data with the agreed dataset contract**
+[ ] **Task 2 — Reconcile the supplied SID data with the agreed dataset contract** *(in progress: tooling tested; real Drive run pending)*
 
-  - [ ] Preserve `hackathon_data/raw/sid_set/` as immutable source bytes and verify the reported 20,000-image inventory, labels, corruption results, and exact-duplicate findings.
-  - [ ] Keep only `real` and `full_synthetic`; assert that SID label `2` and all mixed/tampered/ambiguous rows are absent.
-  - [ ] Treat the existing `cleaned/sid_set/` 336×336 set as a smoke-test artifact, not automatically as the canonical training view: its real-only recompression is label-dependent and its resize may remove native low-level evidence.
-  - [ ] Build a manifest containing stable `source_id`, hashes, label, source path, dimensions, format, generator metadata when available, processing history, and feature-eligibility fields from [training.md](../training/training.md).
-  - [ ] Run exact and perceptual duplicate checks before splitting; group all duplicates and all derivatives of one source together.
-  - [ ] Create canonical matched-clean derivatives from the immutable originals using the same encoder, quality distribution, chroma subsampling, color conversion, and metadata policy for both labels.
-  - [ ] Compare fixed Q96 with Q95–Q100 using nuisance-only audits; freeze the policy before model comparison.
-  - [ ] Produce a source-grouped `seed_train`, `selection_val`, and sealed `final_test`; create a `self_train_pool` only if enough independent sources remain.
-  - [ ] Complete when the manifest hash, split hash, class counts, duplicate report, and nuisance-bias report are saved and reproducible.
+  - [x] Implement immutable-source inventory, corruption checking, dimensions/formats, SHA-256, color-aware perceptual hashes, and optional strict 20,000-row verification.
+  - [x] Implement fail-closed SID label mapping; keep only `real`/`authentic` and `synthetic`/`ai_generated`, and exclude label `2`, tampered, mixed, edited, and ambiguous rows.
+  - [x] Keep the existing `cleaned/sid_set/` 336×336 real-only recompressed handoff outside the canonical-data builder.
+  - [x] Implement the source-original manifest fields from [training.md](../training/training.md), including stable IDs, source paths, generator/capture metadata, C2PA status, and eligibility flags.
+  - [x] Implement exact and near-duplicate grouping, deterministic primary selection, grouped splitting, and mandatory review/exclusion for cross-label duplicate groups.
+  - [x] Implement source-byte C2PA scanning with remote/OCSP fetching disabled; matched derivation refuses unchecked/error sources unless an explicit fixture-only override is used.
+  - [x] Implement deterministic fixed-Q96 and uniform-Q95–Q100 matched-clean builders with the same Pillow encoder, RGB conversion, 4:4:4 subsampling, metadata stripping, and no resize for both labels.
+  - [x] Implement nuisance-only label-predictiveness audits and 1,000-per-label policy pilots.
+  - [x] Implement deterministic 60/25/7.5/7.5 grouped splits and persist source/output manifest hashes.
+  - [x] Add `01_task2_data_contract.ipynb`, Make targets, and fixture tests covering filtering, corruption, duplicates, cross-label conflicts, splitting, matched encoding, and nuisance metrics.
+  - [ ] Run the Task 2 notebook against `/content/hackathon_data/raw/sid_set` in Colab and resolve any failed source-audit gate.
+  - [ ] Preserve both matched-policy pilot reports for the Stage A comparison; do not select from nuisance accuracy alone.
+  - [ ] Complete when real-data manifests/reports are copied to Drive and their hashes, class counts, C2PA statuses, duplicate findings, and nuisance results have been reviewed.
 
 [ ] **Task 3 — Implement preprocessing and the independent-transform contract**
 

@@ -24,7 +24,19 @@
     "name": "sid_set",
     "labels": ["authentic", "ai_generated"],
     "excluded_labels": ["tampered", "mixed", "ai_edited", "ambiguous"],
-    "manifest_version": 1
+    "manifest_version": 1,
+    "raw_relative_path": "raw/sid_set",
+    "labels_filename": "labels.csv",
+    "images_directory": "images",
+    "expected_raw_csv_rows": 20000,
+    "perceptual_hash_max_distance": 4,
+    "c2pa_scan_required_before_derivation": true,
+    "split_fractions": {
+      "seed_train": 0.6,
+      "self_train_pool": 0.25,
+      "selection_val": 0.075,
+      "final_test": 0.075
+    }
   },
   "model": {
     "identifier": "openai/clip-vit-large-patch14-336",

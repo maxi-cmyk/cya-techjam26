@@ -62,6 +62,15 @@ def validate_config(config: dict[str, Any]) -> None:
     if config["dataset"].get("labels") != ["authentic", "ai_generated"]:
         raise ConfigError("Dataset labels must remain ['authentic', 'ai_generated']")
 
+    split_fractions = config["dataset"].get("split_fractions", {})
+    expected_splits = {"seed_train", "self_train_pool", "selection_val", "final_test"}
+    if set(split_fractions) != expected_splits:
+        raise ConfigError(f"Dataset splits must be {sorted(expected_splits)}")
+    if abs(sum(split_fractions.values()) - 1.0) > 1e-9:
+        raise ConfigError("Dataset split fractions must sum to 1.0")
+    if config["dataset"].get("c2pa_scan_required_before_derivation") is not True:
+        raise ConfigError("C2PA source scanning must be required before derivation")
+
     transforms = config["benchmark_transforms"]
     if transforms.get("allow_chaining") is not False:
         raise ConfigError("Benchmark transform chaining must remain disabled")
@@ -82,4 +91,3 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("The base configuration must freeze the CLIP backbone")
     if model.get("input_size") != config["preprocessing"].get("train_crop_size"):
         raise ConfigError("Training crop size must match the CLIP input size")
-

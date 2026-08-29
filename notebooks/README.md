@@ -16,3 +16,5 @@ Start with `00_colab_setup.ipynb`, using the official Google Colab VS Code exten
 10. keep temporary caches under `/content` and sync checkpoints/metrics to `/content/drive/MyDrive/cya-techjam26/artifacts`.
 
 The Colab virtual machine is disposable. Drive holds source data and durable outputs, while `/content` holds the active repository, extracted dataset, feature cache, and other high-I/O working files.
+
+After setup passes, use `01_task2_data_contract.ipynb` to audit the immutable SID sources, freeze grouped splits, and compare the two matched-clean encoding candidates. Its real-data assertions are intentionally strict and stop before derivation when source counts, corruption, C2PA scanning, or cross-label duplicate checks fail.
