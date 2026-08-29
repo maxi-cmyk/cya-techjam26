@@ -22,3 +22,5 @@ After setup passes, use `01_task2_data_contract.ipynb` to audit the immutable SI
 Then use `02_stage_a_clip.ipynb` to regenerate disposable matched-clean pilots when needed, run frozen-CLIP Stage A for both matching policies and three seeds, create locked Task 5 clean-selection reports, and sync completed artifacts to Drive.
 
 After Stage A selects a matching policy, `03_rine_stage_b.ipynb` runs the frozen-CLIP intermediate-layer ablation on the same splits and seeds. It records a provisional clean decision while leaving final 50/50 retention pending the Task 3 transform rows.
+
+`04_frequency_stage1.ipynb` extracts the deterministic FFT/DCT/residual feature bank, trains magnitude-only and bounded-phase variants across three seeds, audits nuisance overlap, and leaves the Stage 1 early exit disabled.

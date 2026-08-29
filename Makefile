@@ -1,4 +1,4 @@
-.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare
+.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare
 
 DATA_ROOT ?= /content/hackathon_data
 ARTIFACT_ROOT ?= artifacts
@@ -67,3 +67,14 @@ task6-rine:
 
 task6-compare:
 	python scripts/compare_stage_a_rine.py --stage-a-root $(ARTIFACT_ROOT)/task4 --stage-b-root $(ARTIFACT_ROOT)/task6 --output $(ARTIFACT_ROOT)/task6/stage_a_vs_rine.json
+
+FREQUENCY_VARIANT ?= magnitude
+
+task7-extract:
+	python scripts/extract_frequency_features.py --manifest $(ARTIFACT_ROOT)/task2/fixed_q96_manifest.csv --output $(ARTIFACT_ROOT)/task7/frequency_features.csv --report $(ARTIFACT_ROOT)/task7/extraction_report.json --cache-root /content/frequency_feature_cache --matching-policy fixed_q96 --workers 4
+
+task7-train:
+	python scripts/train_frequency_baseline.py --features $(ARTIFACT_ROOT)/task7/frequency_features.csv --output $(ARTIFACT_ROOT)/task7/$(FREQUENCY_VARIANT)/seed_$(TASK4_SEED) --variant $(FREQUENCY_VARIANT) --seed $(TASK4_SEED)
+
+task7-compare:
+	python scripts/compare_frequency_variants.py --task7-root $(ARTIFACT_ROOT)/task7 --output $(ARTIFACT_ROOT)/task7/variant_comparison.json

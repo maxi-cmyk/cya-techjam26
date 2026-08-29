@@ -20,6 +20,7 @@ REQUIRED_SECTIONS = {
     "preprocessing",
     "benchmark_transforms",
     "features",
+    "frequency",
     "optimization",
     "evaluation",
 }
@@ -85,6 +86,17 @@ def validate_config(config: dict[str, Any]) -> None:
 
     if config["features"].get("frequency_fast_track") is not False:
         raise ConfigError("Frequency fast-track must be disabled in the base configuration")
+
+    frequency = config["frequency"]
+    if not frequency.get("extractor_version"):
+        raise ConfigError("Frequency extractor version is required")
+    for name in ("radial_bins", "angular_bins", "dct_bins", "phase_bins"):
+        if frequency.get(name, 0) <= 1:
+            raise ConfigError(f"Frequency {name} must exceed one")
+    if frequency.get("max_analysis_size", 0) < 32:
+        raise ConfigError("Frequency max_analysis_size must be at least 32")
+    if frequency.get("workers", 0) <= 0:
+        raise ConfigError("Frequency workers must be positive")
 
     model = config["model"]
     if model.get("freeze_backbone") is not True:

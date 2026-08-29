@@ -140,25 +140,28 @@ The verified T4 run completed all six policy/seed combinations and persisted the
 
 Task 5 clean reports for both policies and all three seeds were generated and copied to Drive. The final-test lock remained in place. No robustness mean or 50/50 score is claimed before Task 3 produces the independent transform cells.
 
-[ ] **Task 6 — Add the RINE-style Stage B representation** *(implementation complete; Colab ablation pending)*
+[ ] **Task 6 — Add the RINE-style Stage B representation** *(clean ablation verified and provisionally retained; robustness waits for Task 3)*
 
   - [x] Expose predeclared CLIP layers 6/12/18/24 without unfreezing the backbone and cache their CLS representations by immutable view/model keys.
   - [x] Train only softmax layer importance and one binary head on fixed-Q96 with the same manifest, splits, seeds, and optimization contract as Stage A.
   - [x] Implement paired Stage A versus Stage B clean comparison with the predeclared one-point per-class regression tolerance; transformed comparison waits for Task 3.
   - [x] Record added cache size, extraction throughput, training history, layer importance, and peak GPU memory.
-  - [ ] Run `03_rine_stage_b.ipynb` for seeds 42/43/44 and record the provisional clean keep/drop result.
+  - [x] Run `03_rine_stage_b.ipynb` for seeds 42/43/44 and record the provisional clean keep/drop result.
   - [ ] Retain Stage B only if it improves the locked 50/50 criterion without breaching R.Acc./F.Acc. regression limits after Task 3 integration.
   - [ ] Complete when Stage A versus Stage B is a reproducible, apples-to-apples ablation with a recorded keep/drop decision.
 
-[ ] **Task 7 — Implement deterministic Stage 1 frequency features**
+The verified T4 run extracted layers 6/12/18/24 for 1,390 fixed-Q96 images in 39.6 seconds at 35.1 images/second and approximately 1.77 GB peak GPU allocation. Across seeds 42/43/44, RINE reached 99.39% mean clean accuracy versus Stage A's 97.58%, with +2.63-point authentic and +1.12-point AI-generated mean accuracy changes. The provisional clean decision is `retain`; the final decision remains pending Task 3's robustness cells and the locked 50/50 score.
 
-  - [ ] Extract FFT/DCT log-magnitude summaries, radial/angular power, periodic-peak prominence, residual autocorrelation, and local neighboring-pixel dependencies.
-  - [ ] Keep generator paradigm, checkpoint, decoder/tokenizer, and upsampling metadata as evaluation strata rather than prediction targets.
-  - [ ] Fit feature scaling on `seed_train` only and cache versioned vectors with validity indicators.
-  - [ ] Train a frequency-only classifier and then a small projection fused with the retained CLIP representation.
-  - [ ] Compare magnitude and bounded phase-spectrum variants, especially on JPEG and resize rows.
-  - [ ] Audit overlap with compression/file-source nuisance features and remove generator-specific cues that fail held-out evaluation.
-  - [ ] Keep the Stage 1 early exit disabled; consider enabling synthetic-only exit only after locked precision, confidence-interval, coverage, authentic, held-out-family, and transform gates pass.
+[ ] **Task 7 — Implement deterministic Stage 1 frequency features** *(implementation complete; Colab baseline pending)*
+
+  - [x] Extract FFT/DCT log-magnitude summaries, radial/angular power, periodic-peak prominence, residual autocorrelation, and local neighboring-pixel dependencies.
+  - [x] Keep generator/checkpoint/source metadata as evaluation strata rather than prediction targets.
+  - [x] Fit feature scaling on `seed_train` only and cache versioned vectors with validity indicators and extraction errors.
+  - [x] Train magnitude/residual and magnitude/residual-plus-bounded-phase frequency-only classifiers; RINE fusion waits for clean representation selection and Task 3 integration.
+  - [x] Implement paired magnitude-versus-phase comparison; JPEG and resize rows wait for Task 3.
+  - [x] Audit the strongest correlations with file size, dimensions, and normalization quality on `seed_train`.
+  - [x] Keep the Stage 1 early exit disabled in configuration and training; any future early-exit claim still requires locked precision, confidence, coverage, authentic, held-out-family, and transform gates.
+  - [ ] Run `04_frequency_stage1.ipynb` and record the clean representation decision across seeds 42/43/44.
   - [ ] Complete when frequency-only and incremental-fusion tables support a keep/drop decision and the default inference path still falls through to Stage 2.
 
 [ ] **Task 8 — Add auxiliary feature families one at a time**

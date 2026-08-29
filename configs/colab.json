@@ -79,6 +79,15 @@
     "radial_distortion": false,
     "frequency_fast_track": false
   },
+  "frequency": {
+    "extractor_version": "frequency-v1",
+    "radial_bins": 24,
+    "angular_bins": 12,
+    "dct_bins": 16,
+    "phase_bins": 12,
+    "max_analysis_size": 1024,
+    "workers": 4
+  },
   "optimization": {
     "loss": "bce_with_logits",
     "optimizer": "adamw",
