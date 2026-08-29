@@ -34,6 +34,7 @@ class TransformResult:
 
     image: Image.Image
     realized: dict[str, Any]
+    encoded_bytes: bytes | None = None
 
 
 def benchmark_cells(config: dict[str, Any]) -> tuple[TransformCell, ...]:
@@ -131,6 +132,7 @@ def _jpeg(rgb: Image.Image, cell: TransformCell) -> TransformResult:
         progressive=False,
         exif=b"",
     )
+    encoded_bytes = encoded.getvalue()
     encoded.seek(0)
     with Image.open(encoded) as decoded:
         image = decoded.convert("RGB")
@@ -144,6 +146,7 @@ def _jpeg(rgb: Image.Image, cell: TransformCell) -> TransformResult:
             "exif": "",
             "output_format": "JPEG",
         },
+        encoded_bytes,
     )
 
 

@@ -81,6 +81,7 @@ def _validated_inputs(
 def _save_verified_sibling(
     *,
     image: Image.Image,
+    encoded_bytes: bytes | None,
     destination: Path,
     cell: TransformCell,
     overwrite: bool,
@@ -94,18 +95,14 @@ def _save_verified_sibling(
     os.close(descriptor)
     temporary = Path(temporary_name)
     try:
-        save_options: dict[str, Any] = {"format": cell.output_format}
         if cell.output_format == "JPEG":
-            save_options.update(
-                {
-                    "quality": cell.parameter,
-                    "subsampling": 0,
-                    "optimize": False,
-                    "progressive": False,
-                    "exif": b"",
-                }
-            )
-        image.save(temporary, **save_options)
+            if encoded_bytes is None:
+                raise TransformMaterializationError(
+                    f"JPEG cell {cell.cell_id!r} did not provide encoded bytes"
+                )
+            temporary.write_bytes(encoded_bytes)
+        else:
+            image.save(temporary, format=cell.output_format)
 
         with Image.open(temporary) as stored:
             stored.verify()
@@ -162,6 +159,8 @@ def _materialize_one(
         with Image.open(parent_path) as source:
             source.load()
             input_width, input_height = source.size
+            parent_mode = source.mode
+            parent_format = source.format or parent_path.suffix.lstrip(".").upper()
             result = apply_benchmark(
                 source,
                 cell,
@@ -179,6 +178,7 @@ def _materialize_one(
     destination = output_root / cell.cell_id / f"{parent_id}{extension}"
     output_hash, width, height, image_format, mode, file_size = _save_verified_sibling(
         image=result.image,
+        encoded_bytes=result.encoded_bytes,
         destination=destination,
         cell=cell,
         overwrite=overwrite,
@@ -192,6 +192,10 @@ def _materialize_one(
         {
             "sample_id": f"{parent_id}__benchmark__{cell.cell_id}",
             "parent_id": parent_id,
+            "parent_width": input_width,
+            "parent_height": input_height,
+            "parent_mode": parent_mode,
+            "parent_format": parent_format,
             "image_path": str(destination.resolve()),
             "clean_image_path": str(parent_path.resolve()),
             "image_view": "benchmark",
@@ -206,8 +210,6 @@ def _materialize_one(
             "mode": mode,
             "file_size": file_size,
             "encoder_version": f"Pillow-{pillow_version}",
-            "original_width": input_width,
-            "original_height": input_height,
             "output_storage_format": cell.output_format,
             "parent_sha256": parent_hash,
             "realized_parameters": _compact_json(result.realized),

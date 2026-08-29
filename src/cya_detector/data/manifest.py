@@ -6,17 +6,21 @@ import csv
 import hashlib
 import json
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from PIL import Image
-
 
 MANIFEST_FIELDS = [
     "sample_id",
     "source_id",
     "parent_id",
+    "parent_width",
+    "parent_height",
+    "parent_mode",
+    "parent_format",
     "source_path",
     "image_path",
     "clean_image_path",

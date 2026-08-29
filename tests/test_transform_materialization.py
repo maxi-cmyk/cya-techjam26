@@ -16,6 +16,7 @@ from cya_detector.data.manifest import (
 )
 from cya_detector.transforms.benchmark import (
     TransformContractError,
+    apply_benchmark,
     benchmark_cells,
     derive_seed,
 )
@@ -70,10 +71,12 @@ class TransformMaterializationTests(unittest.TestCase):
                     "dataset_name": "fixture",
                     "license_status": "test-only",
                     "transform": "clean",
-                    "width": 19,
-                    "height": 17,
-                    "format": "JPEG",
-                    "mode": "RGB",
+                    "width": 999,
+                    "height": 997,
+                    "format": "PNG",
+                    "mode": "L",
+                    "original_width": 101,
+                    "original_height": 103,
                     "output_storage_format": "JPEG",
                 }
             )
@@ -140,6 +143,12 @@ class TransformMaterializationTests(unittest.TestCase):
             self.assertEqual(row["sha256"], sha256_file(output_path))
             self.assertEqual(row["parent_sha256"], sha256_file(parent_path))
             self.assertEqual(row["clean_image_path"], str(parent_path.resolve()))
+            self.assertEqual(row["parent_width"], "19")
+            self.assertEqual(row["parent_height"], "17")
+            self.assertEqual(row["parent_mode"], "RGB")
+            self.assertEqual(row["parent_format"], "JPEG")
+            self.assertEqual(row["original_width"], "101")
+            self.assertEqual(row["original_height"], "103")
             self.assertEqual(row["transform_version"], "task3-v1")
             self.assertEqual(row["preprocessing_version"], "clip-crop-v1")
             self.assertEqual(row["output_storage_format"], expected_format)
@@ -166,6 +175,20 @@ class TransformMaterializationTests(unittest.TestCase):
             )
 
         self.assertFalse(list((self.root / "variants").rglob("*.tmp*")))
+
+    def test_jpeg_materialization_persists_the_single_encoder_stream(self) -> None:
+        self._materialize()
+        jpeg_row = next(
+            row
+            for row in read_manifest(self.root / "variants.csv")
+            if row["transform"] == "jpeg" and row["source_id"] == "authentic"
+        )
+        parent_id = jpeg_row["parent_id"]
+        with Image.open(self.root / "authentic.jpg") as parent:
+            expected = apply_benchmark(parent, self.jpeg_cell, parent_id, 42)
+
+        self.assertIsNotNone(expected.encoded_bytes)
+        self.assertEqual(Path(jpeg_row["image_path"]).read_bytes(), expected.encoded_bytes)
 
     def test_chained_parent_is_rejected_before_any_output_is_written(self) -> None:
         records = read_manifest(self.manifest)

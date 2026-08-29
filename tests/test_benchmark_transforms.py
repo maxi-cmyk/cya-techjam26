@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import unittest
 from pathlib import Path
 
@@ -164,8 +165,20 @@ class BenchmarkTransformTests(unittest.TestCase):
         source = self.gradient((8, 8))
         result = apply_benchmark(source, self.by_id["jpeg_q70"], "a", 42)
 
+        expected_stream = io.BytesIO()
+        source.convert("RGB").save(
+            expected_stream,
+            format="JPEG",
+            quality=70,
+            subsampling=0,
+            optimize=False,
+            progressive=False,
+            exif=b"",
+        )
+
         self.assertEqual(result.image.mode, "RGB")
         self.assertEqual(result.image.size, source.size)
+        self.assertEqual(result.encoded_bytes, expected_stream.getvalue())
         self.assertEqual(
             hashlib.sha256(result.image.tobytes()).hexdigest(),
             "e3d9bb013a66e09b93bd0ae917d4c0f7c6b56671ab03120f6e4aed758061b9ec",
@@ -188,6 +201,7 @@ class BenchmarkTransformTests(unittest.TestCase):
         self.assertEqual(result.image.mode, "RGB")
         self.assertEqual(result.image.size, source.size)
         self.assertEqual(result.realized, {"sigma": 1.0, "output_format": "PNG"})
+        self.assertIsNone(result.encoded_bytes)
 
     def test_unknown_transform_fails_closed(self) -> None:
         cell = TransformCell("rotate", 90, "rotate_90", "PNG")
