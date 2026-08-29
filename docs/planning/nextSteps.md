@@ -26,7 +26,7 @@ Expected paths are frozen in `configs/colab.json`:
 At the start of every Colab session:
 
 1. Open a notebook through the official VS Code Colab extension and select **Kernel -> Colab -> Auto Connect**.
-2. Select a GPU runtime, then use **Colab: Mount Google Drive to Server...** or run:
+2. Select the runtime required by the notebook: GPU for CLIP/RINE or repeated patch encoding; CPU for deterministic frequency and color/physical feature extraction. Then use **Colab: Mount Google Drive to Server...** or run:
 
    ```python
    from google.colab import drive
@@ -48,6 +48,67 @@ At the start of every Colab session:
 
 Every notebook remains a thin launcher for versioned modules in `src/`. A runtime reset requires rerunning installation, local data staging, and smoke checks; durable artifacts already copied to Drive survive the reset.
 
+## Current progress and critical path
+
+| Task | Current state | Recorded decision | Remaining dependency |
+|---|---|---|---|
+| 1. Project skeleton | Complete | Frozen Colab configuration and reproducibility helpers | None |
+| 2. Data contract | Complete | 19,882 eligible primary images; fixed-Q96 selected later by Stage A | None |
+| 3. Independent transforms | In progress with teammate | No chained transforms; each cell derives directly from matched clean | Critical blocker for every robustness and 50/50 decision |
+| 4. Frozen CLIP Stage A | Clean milestone complete | Fixed-Q96, 97.58% clean | Re-evaluate on Task 3 cells |
+| 5. Evaluation harness | Clean milestone complete | Final-test lock and 50/50 formula implemented | Populate robustness tables from Task 3 |
+| 6. RINE Stage B | Clean milestone complete | Provisionally retain, 99.39% clean | Confirm with Task 3 and class-regression gates |
+| 7. Frequency Stage 1 | Clean milestone complete | Retain magnitude/residual at 83.03%; drop phase; early exit remains disabled | Robustness and incremental fusion after Task 3 |
+| 8. Color/physical auxiliaries | Current matched-data milestone complete | Lab wins the color-only ablation at 82.42%; PRNU/CA not eligible on matched-Q96 | Color robustness/fusion after Task 3; Task 8B revisits physical families with native data |
+| 9. Texture path | Patch selector complete | Deterministic top-k non-overlapping Laplacian/Sobel selection passes fixtures | Implement global+patch encoding and benchmark cost |
+| 10. Packaging | Not started | Final-test remains sealed | Wait for Tasks 3, 6-9 retention decisions |
+
+The critical path is now Task 3. Task 9 model integration can proceed in parallel, but no final feature retention, calibration, or final-test run is valid until the independent transformation rows exist.
+
+## Evidence-based model decisions
+
+All accuracy values below are clean `selection_val` results. They are useful for pruning experiments, but they are not the final challenge score until Task 3 supplies the independent robustness cells.
+
+| Component | Clean result | Confidence or failure evidence | Action |
+|---|---:|---|---|
+| RINE Stage B | **99.39%** | +1.82 points over Stage A; +2.63 authentic and +1.12 AI-generated points; no clean class collapse | Provisionally retain and retrain its head under the controlled Task 3 policy |
+| Frozen CLIP Stage A | **97.58%** | Strong clean baseline on fixed-Q96 | Retain as the mandatory baseline and robustness comparator |
+| Frequency magnitude/residual | **83.03%** | Best frequency representation | Keep only as an auxiliary fusion candidate; do not enable early exit |
+| Frequency magnitude/residual/phase | 80.00% | Phase caused -3.03 overall, -4.49 AI-generated, and -1.32 authentic points | Drop phase; do not retrain this branch |
+| Lab correlation | **82.42%** | Approximately 99-100% extractor confidence and 100% validity across both labels | Keep as the color-family fusion candidate and train with matched color-jitter distributions |
+| RGB+Lab correlation | 78.79% | Adding RGB reduced Lab-only accuracy by 3.64 points | Drop this fixed concatenation; only revisit if a later learned projection proves incremental value |
+| RGB correlation | 55.15% | Nearly chance despite approximately 99-100% confidence and 100% validity | Drop the current representation; low-priority redesign only |
+| PRNU coherence | Not trained | Extractor produced values with high internal confidence, but native physical eligibility was 0% for both labels | Prioritize in Task 8B with native multi-image camera data; do not treat extractor confidence as authenticity confidence |
+| Chromatic aberration | Not trained | Native eligibility 0%; only about 24-28% extractor validity and roughly 0.9-1.7% mean confidence | Revisit after PRNU in Task 8B using native camera/lens data and calibrated edge support |
+| Radial distortion | Not run | Insufficient eligible line/arc support | Keep deferred |
+
+High extractor confidence means the statistic was numerically measurable; it does **not** mean the classifier is correct. RGB is the clearest example: excellent coverage and confidence but only 55.15% clean accuracy. PRNU is more severe: its internal coherence calculation succeeds, but the recompressed view makes the physical interpretation ineligible.
+
+### Required retraining and fusion matrix
+
+Run these only after Task 3 is merged:
+
+1. RINE with the backbone frozen and its head retrained under the clean-or-one-controlled-transform sampler, seeds 42/43/44.
+2. RINE plus magnitude/residual frequency, training only the frequency projection and fusion head.
+3. RINE plus Lab, training only the Lab projection and fusion head with identical jitter sampling for both labels.
+4. RINE plus magnitude/residual frequency plus Lab, but only if both individual additions pass the 50/50 and per-class gates.
+5. Global RINE plus the Task 9 texture aggregator under a fixed patch budget, including latency and resize robustness.
+
+Do not spend another training run on phase, the current RGB-only vector, RGB+Lab fixed concatenation, PRNU, chromatic aberration, radial distortion, or full-backbone CLIP fine-tuning **on the current matched-Q96 handoff**. PRNU and optics remain planned experiments, but their next step is better data rather than more fitting. Full CLIP fine-tuning remains optional until the frozen pipeline is complete.
+
+### Planned native physical-signal track
+
+Task 8B is a separate evidence track, not a reason to block Task 3 or the viable RINE package. Prioritize PRNU first and chromatic aberration second.
+
+- Authentic data must contain native or minimally processed camera images, camera/device identifiers, multiple images per physical sensor, and enough distinct devices to hold out entire sensors during validation.
+- The synthetic side must span diverse generator families and checkpoints. Resolution, codec, quality, and other export settings must be matched independently of label so the fusion head cannot learn file-pipeline shortcuts.
+- Preserve immutable native originals. Keep source-original physical-feature experiments separate from matched derivatives and from independently transformed robustness views.
+- Split authentic data by complete device, not individual image; split synthetic data by source/generator grouping. Report held-out-device, held-out-camera-model, and held-out-generator performance.
+- For PRNU, compare the existing single-image coherence proxy with a classical multi-image reference fingerprint where device groups allow it. A reference-free runtime feature may support fusion, but cannot identify or authenticate an unknown camera by itself.
+- For chromatic aberration, collect native edge-rich scenes and calibration targets across camera/lens combinations, focal lengths, and both corrected and uncorrected outputs. Use calibrated optical measurements to validate the fixed estimator before binary fusion training.
+- Keep physical extractors fixed or separately calibrated; train only their projections and the fusion head from authentic/AI labels. Binary labels alone do not prove that a sensor or lens estimate is physically correct.
+- Run the same independent JPEG, blur, resize, noise, jitter, and crop cells. Retain a physical family only if it improves the locked 50/50 score and held-out-device/generator results without increasing authentic false positives.
+
 ## Dependencies and parallel teammate tracks
 
 Tasks are ordered by integration dependency, but implementation does not have to be fully sequential. Teammates should own separate module paths to avoid merge conflicts.
@@ -66,7 +127,17 @@ Tasks are ordered by integration dependency, but implementation does not have to
 | Task 6 RINE integration | After Stage A runs | Tasks 4 and 5 | Later auxiliary fusion experiments | `src/cya_detector/models/rine.py` |
 | Task 10 packaging | After feature retention | Selected outputs from Tasks 4–9 | Documentation/demo preparation only | inference CLI, calibration, release tests |
 
-Safe work available immediately for other teammates: Task 3, Task 5, the Task 4 model-loader skeleton, Task 7 deterministic extraction, and the separate Task 8/9 extractor modules. Do not start real model selection, calibration, or final-test evaluation until the required upstream gates pass.
+Safe work available immediately while Task 3 finishes: Task 9 global-plus-patch integration, latency measurement on fixtures, and a Task 10 inference-CLI skeleton that does not select weights or read `final_test`. Do not calibrate, freeze the architecture, or run final evaluation yet.
+
+## How to proceed from here
+
+1. **Finish and merge Task 3.** Require fixture tests proving one transform per row, parent/child split integrity, deterministic seeded outputs, exact resize restoration dimensions, and matched transform distributions across labels.
+2. **Materialize the selection robustness views.** Produce every JPEG, blur, resize, noise, color-jitter, and crop parameter cell directly from fixed-Q96 `matched_clean`, never from another transformed image.
+3. **Populate the locked evaluation.** Score Stage A and RINE on clean plus every Task 3 cell, then compute R.Acc., F.Acc., per-cell accuracy, confusion matrices, calibration diagnostics, robustness mean, and the 50% clean / 50% robustness score.
+4. **Re-test retained auxiliary candidates.** Use magnitude/residual for frequency and Lab for color. Keep phase dropped. Evaluate CLIP/RINE-only, each feature-only diagnostic, and incremental RINE+frequency, RINE+Lab, and RINE+frequency+Lab fusion across seeds 42/43/44.
+5. **Prepare Task 8B without training on the current handoff.** The current matched-Q96 rows have zero native eligibility for PRNU and chromatic aberration. Acquire and audit the native camera/lens dataset above, then run PRNU first and chromatic aberration second as separate ablations. Keep radial distortion deferred until line/arc coverage is demonstrated.
+6. **Complete Task 9 in parallel.** Preserve the global CLIP view, encode a fixed patch budget, train only the aggregator/fusion head, and compare global-only, local-only, and combined accuracy plus latency. Resize 0.5x/0.25x results wait for Task 3.
+7. **Freeze and package only after those gates.** Select the architecture by the locked 50/50 score and per-class regression limits, fit temperature once on clean `selection_val`, implement the directory JSON contract, and then run sealed `final_test` once.
 
 ## Action items
 
@@ -80,7 +151,7 @@ Safe work available immediately for other teammates: Task 3, Task 5, the Task 4 
   - [x] Add `make smoke` for strict installed-environment validation and `make smoke-bootstrap` for dependency-free repository/configuration validation.
   - [x] Add configuration and metadata unit tests plus a Colab notebook workflow note.
 
-Task 1 implementation is complete. The first connected Colab GPU session must still run `make install-colab`, `make smoke`, and record the assigned accelerator before Task 2 data work begins.
+Task 1 is complete and has been exercised in both CPU and T4 Colab sessions. Continue running the notebook-local install and smoke gates after every disposable-runtime reset.
 
 [x] **Task 2 — Reconcile the supplied SID data with the agreed dataset contract** *(verified in Colab on the full SID handoff)*
 
@@ -166,7 +237,7 @@ The verified T4 run extracted layers 6/12/18/24 for 1,390 fixed-Q96 images in 39
 
 The verified CPU run completed all six representation/seed combinations. Magnitude plus residual features reached 83.03% mean clean accuracy versus 80.00% with bounded phase added. The phase features were dropped, magnitude is the retained clean representation, `final_test` remained sealed, and the Stage 1 early exit remained disabled.
 
-[ ] **Task 8 — Add auxiliary feature families one at a time** *(extractors and guarded clean launcher implemented; Colab run pending)*
+[x] **Task 8 — Add auxiliary feature families one at a time** *(current matched-data milestone verified; robustness/fusion waits for Task 3)*
 
   - [x] Implement RGB/Lab global and local standardized inter-channel correlations with low-variance masks, coverage, and numerical guards.
   - [x] Implement the single-image PRNU-coherence residual summaries as an experimental proxy; do not present it as camera identification.
@@ -174,14 +245,30 @@ The verified CPU run completed all six representation/seed combinations. Magnitu
   - [x] Derive label-independent eligibility from native dimensions and `source_original` provenance rather than resolution alone.
   - [x] Mark matched/recompressed SID views ineligible for native PRNU/optics claims.
   - [x] Normalize each physical family on valid/eligible `seed_train` rows, zero-fill only after normalization, and pair missing values with eligibility, validity, and confidence masks.
-  - [ ] Train only each family projection and the fusion head while CLIP remains frozen; run RGB-only, Lab-only, PRNU-only, CA-only, eligible-distortion-only, and incremental-fusion ablations.
+  - [x] Run RGB-only, Lab-only, and RGB+Lab feature-only clean ablations across seeds 42/43/44; select Lab within the color family.
+  - [x] Refuse PRNU-only, CA-only, and radial-distortion training on the current matched-Q96 handoff because native physical eligibility is zero for both labels.
   - [x] Audit feature eligibility, validity, and confidence counts by label/split and refuse physical-family fitting when eligibility is absent or class-imbalanced.
-  - [ ] Run `05_auxiliary_stage_c.ipynb` for RGB, Lab, and combined color baselines across seeds 42/43/44.
-  - [ ] Complete when every family has a documented physical limitation, coverage report, latency measurement, and locked keep/drop decision.
+  - [x] Run `05_auxiliary_stage_c.ipynb` for RGB, Lab, and combined color baselines across seeds 42/43/44.
+  - [x] Complete the clean matched-view family decision with documented physical limitations and coverage; incremental RINE fusion and color-jitter robustness remain Task 3 integration work.
+
+The verified CPU run extracted 67 features for 1,390 rows and completed all nine color representation/seed combinations without notebook errors. Lab reached 82.42% mean clean accuracy, RGB+Lab reached 78.79%, and RGB reached 55.15%, so Lab is the selected color representation for the later fusion ablation. RGB and Lab validity was effectively complete for both labels. PRNU and chromatic-aberration eligibility was 0% for both labels because the evaluated views are matched/recompressed rather than native originals; neither family was trained or retained, radial distortion remains deferred, and no camera or lens authenticity claim is made.
+
+[ ] **Task 8B — Revisit physical-capture features with eligible native data** *(planned; does not block the current critical path)*
+
+  - [ ] Acquire or assemble native/minimally processed authentic images with device IDs, multiple images per sensor, camera/lens metadata where available, and permission to use them for training/evaluation.
+  - [ ] Add diverse fully synthetic sources and match codec, quality, resolution, and export settings independently of label.
+  - [ ] Freeze grouped splits that hold out complete authentic devices/camera models and synthetic generator families/checkpoints.
+  - [ ] Run a native-data nuisance audit before fitting any physical fusion head.
+  - [ ] Prioritize PRNU: compare single-image coherence with multi-image reference-fingerprint estimates where device groups permit, while keeping runtime claims reference-free and non-authenticating.
+  - [ ] Validate the chromatic-aberration estimator on native edge-rich scenes and calibration targets across corrected/uncorrected camera-lens outputs and focal lengths.
+  - [ ] Train only PRNU/CA projection and fusion weights with RINE frozen; never train the physical estimator from binary labels alone.
+  - [ ] Report clean, independent-transform, held-out-device, held-out-camera-model, and held-out-generator results plus eligibility, validity, confidence, and authentic false-positive rates.
+  - [ ] Retain PRNU or chromatic aberration only if it improves the locked 50/50 score without breaching per-class, shortcut, coverage, or generalization gates.
 
 [ ] **Task 9 — Add the texture-aware local-detail path under a fixed budget**
 
-  - [ ] Generate multi-scale Laplacian/Sobel energy maps and select fixed top-k non-overlapping patches before CLIP input conversion.
+  - [x] Generate multi-scale Laplacian/Sobel energy maps and select fixed top-k non-overlapping patches before CLIP input conversion.
+  - [x] Add deterministic fixture coverage for non-overlap, stable ordering, top-k bounds, high-detail selection, small images, and invalid parameters.
   - [ ] Keep a global image view so patch selection cannot discard semantic context.
   - [ ] Benchmark shared frozen-CLIP patch encoding against a small shared patch head if repeated CLIP encodes exceed the measured compute budget.
   - [ ] Train soft attention/aggregation and fusion weights; never use smoothness, sharpness, edge density, LBP, GLCM, or OCR confidence as fixed verdict rules.
