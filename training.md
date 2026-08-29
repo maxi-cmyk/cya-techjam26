@@ -32,9 +32,12 @@ Required fields:
 | Field | Purpose |
 |---|---|
 | `sample_id` | Stable unique identifier |
-| `source_id` | Groups a clean source with all derived variants |
+| `source_id` | Groups an immutable original with all derived views and variants |
+| `parent_id` | Identifies the direct parent of a derivative or transform |
+| `source_path` | Path to the immutable original bytes |
 | `image_path` | Path to the concrete image file |
-| `clean_image_path` | Path to the clean parent |
+| `clean_image_path` | Path to the canonical matched clean parent |
+| `image_view` | `source_original`, `matched_clean`, or `robustness_variant`; runtime input is `received_view` |
 | `sha256` | Exact-file duplicate detection |
 | `perceptual_hash` | Near-duplicate screening |
 | `label` | `authentic` or `ai_generated` |
@@ -45,6 +48,21 @@ Required fields:
 | `transform_parameter` | Exact quality, sigma, scale, or crop value |
 | `transform_seed` | Reproduces stochastic noise/jitter |
 | `width`, `height`, `format` | Nuisance-distribution checks |
+| `normalization_codec` | Codec used for the canonical matched derivative |
+| `normalization_quality` | Label-independent matched quality value |
+| `encoder_version` | Encoder library and version |
+| `chroma_subsampling` | JPEG chroma-subsampling setting |
+| `original_format` | Format of the immutable source |
+| `estimated_original_quality` | Estimated pre-ingestion JPEG quality, when applicable |
+| `quantization_table_hash` | Compression-table audit identifier |
+| `resize_scale` | `0.5` or `0.25` for a resize round trip |
+| `down_interpolation`, `up_interpolation` | Locked interpolation modes; both `bilinear` for the benchmark |
+| `resize_library`, `resize_library_version` | Exact resize implementation |
+| `antialias` | Locked antialias setting |
+| `dimension_rounding` | Rule used for intermediate dimensions |
+| `intermediate_width`, `intermediate_height` | Reproducible downsample dimensions |
+| `original_width`, `original_height` | Dimensions restored by the upsample step |
+| `output_storage_format` | Lossless format or in-memory array representation |
 | `generator_paradigm` | GAN, diffusion, autoregressive, hybrid, or `unknown` |
 | `generator_name` | Generator/model name when known |
 | `generator_checkpoint` | Checkpoint/version when known |
@@ -88,31 +106,37 @@ Never use `final_test` for:
 - early stopping;
 - Stage 1 fast-track thresholds.
 
-## 4. Clean Masters and Independent Transform Generation
+## 4. Original, Matched Clean, and Independent Transform Generation
 
-Keep clean masters immutable. Generate each variant directly from its clean master:
+Keep every ingested original immutable. Before any re-encoding, run C2PA on the original bytes and preserve the metadata needed for provenance auditing. Native PRNU, frequency, color, and optics features may be extracted from this original view for an explicitly separated ablation.
+
+Create a canonical matched clean derivative for primary-model training by decoding and re-encoding both labels with the same encoder, color conversion, chroma subsampling, metadata policy, and quality distribution. Every setting must be sampled independently of the label. Start by comparing fixed Q96 with a narrow high-quality distribution such as Q95-Q100; select the policy on the locked bias audit and held-out results rather than clean accuracy alone.
+
+Generate each robustness variant directly from its canonical matched clean parent:
 
 | Transform | Parameter cells |
 |---|---|
 | JPEG | quality 90, 70, 50, 30 |
 | Gaussian blur | sigma 0.5, 1.0, 2.0 |
-| Resize and restore | 0.5x, 0.25x |
+| Resize and restore | 0.5x and 0.25x; bilinear down and bilinear up |
 | Gaussian noise | sigma 0.02, 0.05, 0.10 on normalized pixels |
 | Color jitter | brightness/contrast/saturation within +/-20% |
 | Center crop | retain 80% |
 
 Color jitter is one named benchmark operation even when it changes brightness, contrast, and saturation together. It must not be followed by another benchmark transform.
 
-Normal model input preparation—decoding, tensor conversion, and the fixed CLIP input resize/normalization—is applied consistently to every sample and is not counted as a benchmark transform. Forensic features and texture-patch selection should use the decoded image at its available resolution before the CLIP resize wherever possible.
+For a resize row, load the canonical matched clean parent, calculate intermediate dimensions with the locked rounding rule, bilinearly downsample once, and bilinearly restore to the exact parent width and height. The 0.5x and 0.25x severities are separate cells and are never derived from one another. Retain the result in memory or save it losslessly; saving it as JPEG would add a second benchmark effect.
 
-Use the same transform-cell probabilities, parameter distributions, and seed policy for both labels. Do not re-encode all clean masters merely to equalize datasets; prefer sampling and stratification so PRNU, frequency, and optics evidence is not destroyed before training.
+Matched re-encoding is offline dataset baseline construction, not a benchmark transformation, and is never rerun by the inference script. At runtime every branch uses the exact `received_view`. Normal model preparation—decoding, tensor conversion, and fixed CLIP conversion—is not a benchmark transform. Select local patches from the received image at its available resolution before global model-size conversion, retain the global view for context, and encode the selected crops separately.
+
+Use the same normalization-quality distribution, transform-cell probabilities, parameter distributions, and seed policy for both labels. Never overwrite originals. Dataset-level matched re-encoding removes compression-history bias; JPEG Q90/Q70/Q50/Q30 augmentation separately teaches degradation robustness and does not replace the matched pass.
 
 ## 5. Batch Sampling
 
 Naively expanding every clean image into all transform variants would make robustness examples dominate training. Instead, use a hierarchical sampler aligned with the 50/50 score:
 
 1. choose **clean** or **transformed** with equal probability;
-2. if transformed, choose uniformly across transform-and-parameter cells;
+2. if transformed, choose uniformly across transform-and-parameter cells, treating resize-0.5x and resize-0.25x as separate cells;
 3. choose `authentic` or `ai_generated` with equal probability;
 4. choose a generator/decoder stratum for AI images or a capture/dataset stratum for authentic images;
 5. sample a `source_id`, then load the matching clean or transformed row.
@@ -139,15 +163,19 @@ Cache keys must include:
 - transform and parameter;
 - extractor name/version;
 - preprocessing version;
+- image view and matched-encoding configuration;
+- resize library/version, interpolation, antialias, rounding, and storage configuration;
 - relevant configuration values.
 
 Fit normalization means, standard deviations, PCA, or other feature scaling on `seed_train` only. Persist these statistics with the checkpoint and reuse them unchanged on validation, test, and inference data.
 
 Check missingness and validity rates by label. If optical or PRNU extraction fails much more often for one label because of dataset construction, fix the dataset or mask/drop the feature rather than letting missingness become a shortcut.
 
+Before training the main model, fit a nuisance-only audit on format, dimensions, file size, estimated original quality, quantization-table statistics, normalization settings, and feature validity. Compare its label predictiveness before and after matching; investigate or remove any residual class-correlated pipeline setting.
+
 ## 7. Model Inputs and Fusion
 
-The Stage 2 binary head receives:
+The mandatory Stage 2 baseline receives global and patch CLIP representations from the same training sample view that will appear as `received_view` at runtime. Experimental fusion additionally receives the following auxiliary features computed from that same view:
 
 - global frozen CLIP representation;
 - aggregated texture-patch representation;
@@ -195,6 +223,8 @@ Starting from the better CLIP baseline, add one family at a time:
 5. chromatic aberration;
 6. radial lens distortion, only when coverage is adequate;
 7. combinations that survived their individual tests.
+
+Within the frequency ablation, compare phase-spectrum and magnitude-spectrum features separately on clean and Q90/Q70/Q50/Q30 rows. Do not promote phase features into the shipped vector unless they add held-out value beyond matched-view CLIP.
 
 For each addition, train only the feature projection and fusion head while CLIP stays frozen. Run the same seeds and record:
 
@@ -398,8 +428,16 @@ Generated artifacts, downloaded datasets, and checkpoints should not be committe
 - [ ] Binary provenance screening is complete.
 - [ ] Duplicate and source-group leakage checks pass.
 - [ ] Split and manifest hashes are frozen.
-- [ ] Every transformed sample has one clean parent and one transform cell.
+- [ ] Original bytes and metadata are immutable and C2PA is checked before derivation.
+- [ ] Matched-encoding quality, codec, encoder, and subsampling distributions are label-independent.
+- [ ] Every transformed sample has one canonical matched clean parent and one transform cell.
+- [ ] Resize-0.5x and resize-0.25x use pinned bilinear, antialias, rounding, color, dtype, and library settings.
+- [ ] Every resize output matches its parent dimensions and is cached losslessly or kept as an array.
+- [ ] Compression-nuisance predictiveness is audited before and after matching.
 - [ ] Clean/transformed and label sampling are balanced as designed.
+- [ ] Original/unmatched, matched-view, and same-received-view fusion ablations are reproducible.
+- [ ] Global-only, local-only, and global-plus-local resize ablations are reproducible.
+- [ ] Authentic false-positive and synthetic false-negative changes are reported for both resize rows.
 - [ ] Frozen-CLIP baseline is reproducible.
 - [ ] Every auxiliary family has an individual ablation.
 - [ ] Generator/decoder-family holdouts are reported.
@@ -408,5 +446,6 @@ Generated artifacts, downloaded datasets, and checkpoints should not be committe
 - [ ] Temperature is fitted once on clean selection validation.
 - [ ] R.Acc./F.Acc. regression gates pass.
 - [ ] Stage 1 fast-track is either explicitly disabled or has passed its enablement gate.
+- [ ] Stage 1 fast-track is disabled unless its precision gate passes on resized authentic images.
 - [ ] Final-test evaluation occurs only after the pipeline is frozen.
 - [ ] The final 50/50 score and error analysis are reproducible from saved artifacts.

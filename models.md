@@ -42,7 +42,7 @@ Patch energy only chooses candidate regions. It is not an authenticity score. Th
 
 LBP and GLCM may be logged as interpretable diagnostics. OCR-derived structure is a stretch feature evaluated only on detected text regions; missing text and low OCR confidence are neutral. Bespoke hair, foliage, and reflection detectors are not part of the initial model.
 
-The detector never creates extra blurred, compressed, or resized variants at inference. Such a degradation-curve method would chain transformations on already transformed inputs and fall outside the agreed evaluation protocol.
+The detector never creates matched JPEG copies or extra blurred, compressed, or resized variants at inference. It scores the exact `received_view`; test-time variant generation would chain processing on an already transformed input and fall outside the agreed evaluation protocol.
 
 ## PRNU-Coherence Feature Extractor
 
@@ -81,20 +81,33 @@ Only samples with clear source provenance are eligible:
 | `authentic` | Genuinely captured source images | AI-enhanced, face-swapped, composited, or ambiguous images |
 | `ai_generated` | Fully synthetic images with no authentic source | Image-to-image edits, inpainting of authentic images, partial-AI or mixed content |
 
-A clean source and every test variant derived from it must remain in the same split to prevent leakage.
+Each source has an immutable `source_original`, a canonical `matched_clean` derivative, and zero or more `robustness_variant` derivatives. These are offline dataset views. The shipped model accepts one `received_view` and does not require its pre-transform source. Every offline view derived from one source remains in the same split to prevent leakage.
+
+The manifest records at least `source_id`, `parent_id`, `source_path`, `image_path`, `image_view`, `normalization_codec`, `normalization_quality`, `encoder_version`, `chroma_subsampling`, `original_format`, `estimated_original_quality`, and `quantization_table_hash`. Normalization settings are sampled independently of the label.
+
+The required primary-model comparison is:
+
+1. frozen CLIP trained on original/unmatched views;
+2. frozen CLIP trained on canonical matched derivatives;
+3. matched-view CLIP fused with auxiliary features computed from that same received training view.
+
+Compare clean, JPEG-robust, resize-robust, and held-out-generator results. `source_original` features are offline ablations only; retain runtime fusion only if same-view auxiliary features add genuine held-out value without restoring compression-history predictiveness.
 
 ## Independent Transformation Protocol
 
-Each robustness sample is produced directly from its clean source with exactly one transformation and one parameter setting:
+Each robustness sample is produced directly from its canonical matched clean derivative with exactly one benchmark transformation and one parameter setting:
 
 - JPEG compression
 - Gaussian blur
-- Resize and restore
+- Resize-0.5x: bilinear downsample and bilinear restore
+- Resize-0.25x: bilinear downsample and bilinear restore
 - Gaussian noise
 - Color jitter
 - Center crop
 
 No transformed output is passed into another transformation. Results are recorded separately for every transform and parameter; there are no mixed, sequential, or overlaid transformation cases.
+
+Each resize round trip restores the exact parent dimensions and is retained as an array or stored losslessly. Interpolation library/version, antialiasing, dimension rounding, color handling, and dtype handling are fixed across both labels and all splits.
 
 ## Evaluation and Score
 
@@ -115,6 +128,11 @@ The robustness score is the mean binary accuracy across all independent transfor
 - RGB-only, Lab-only, chromatic-aberration-only, eligible radial-distortion-only, and incremental full-fusion results
 - color/optics feature validity, coverage, and confidence by label and transform
 - frequency-only accuracy and candidate fast-track precision/coverage by decoder family, checkpoint holdout, and transform
+- compression-nuisance predictiveness before and after matching
+- original/unmatched CLIP versus matched-view CLIP versus same-received-view fusion
+- global-only CLIP, local-crop-only representation, and global-plus-local CLIP on resize-0.5x and resize-0.25x
+- authentic false-positive rate and synthetic false-negative rate for both resize rows
+- Stage 1 fast-track precision and coverage on resized authentic images
 
 This reporting exposes class collapse even when the aggregate 50/50 score looks acceptable.
 
@@ -125,6 +143,10 @@ Retain the texture head only if it improves the locked 50/50 score or a pre-agre
 Apply the same retention rule to color and optical features. Color-jitter parameters must be sampled from the same distribution for both labels, and feature degradation under color jitter must be reported rather than normalized away.
 
 Apply the retention rule to every spectral sub-feature as well. Remove family-specific cues that add no held-out value, and measure correlation with texture and PRNU so redundant high-frequency evidence is not counted as independent support.
+
+Treat resampling-periodicity features as a bounded resize ablation. They cannot directly issue a verdict or enable the Stage 1 fast-track unless they add held-out value and preserve the required precision on resized authentic images.
+
+Include phase-spectrum features as a bounded JPEG-robustness ablation against magnitude-spectrum features. They remain auxiliary and are retained only if they add held-out-generator or JPEG value beyond matched-view CLIP.
 
 ## Offline Improvement Loop
 

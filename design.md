@@ -12,11 +12,12 @@ This document describes the shipped inference pipeline and the offline evaluatio
 6. **Texture is learned, not thresholded.** Fine-detail regions inform a lightweight learned head; rules such as “smooth equals AI” are prohibited because transformations can make authentic images equally smooth.
 7. **Color and optics require confidence.** Deterministic color-correlation and optical-fit features run inline, but absent or weak physical-camera cues are neutral rather than proof of synthesis.
 8. **Frequency signatures are family-dependent.** Stage 1 measures multiple spectral and neighborhood-pixel cues and is evaluated by generator/decoder family; it does not assume one GAN/diffusion/autoregressive fingerprint.
+9. **Offline and runtime views are distinct.** `source_original` and `matched_clean` are dataset-construction views; the shipped detector receives one `received_view` and never assumes access to its pre-transform source.
 
 ## 2. Inference Architecture
 
 ```text
-Input image
+Exact received image bytes
     |
     v
 Stage 0 — C2PA provenance check
@@ -24,7 +25,13 @@ Stage 0 — C2PA provenance check
     `-- missing, invalid, stripped, or other claim
                     |
                     v
-Stage 1 — family-aware frequency feature bank
+Decode received view once
+    |-- frequency/PRNU/color/optics features
+    |-- global CLIP view
+    `-- detail-rich crops selected before global model-size conversion
+                    |
+                    v
+Stage 1 — family-aware frequency feature bank on received view
     |-- validated clean, high-confidence signature --> candidate ai_generated fast-track
     `-- uncertain, transformed, or authentic-leaning
                     |
@@ -63,19 +70,21 @@ Generator family, decoder type, upsampling factor, checkpoint, and version are d
 
 The early exit is **disabled by default**. It may be enabled only if a pre-agreed high-precision threshold holds on locked authentic data, held-out generator families, and every applicable independent-transform set. Even then, Stage 1 may only return `ai_generated`, never `authentic`; all other cases fall through and retain the feature vector for Stage 2.
 
-JPEG compression, blur, resize, and deliberate spectral correction can hide or alter these cues. A missing checkerboard or expected peak is therefore neutral. The feature bank is an auxiliary forensic signal, not proof of origin.
+JPEG compression, blur, resize, and deliberate spectral correction can hide or alter these cues. Resize restoration can also introduce periodic interpolation structure that resembles a generator fingerprint. Missing evidence and resampling periodicity are therefore neutral by themselves. The feature bank is auxiliary and cannot enter the fast-track unless its precision remains acceptable on resized authentic images.
 
 ### Stage 2 — Main model
 
-Most inputs pass through a frozen CLIP-ViT backbone with a lightweight binary head. A global image view is combined with selected local-detail patches using soft averaging or attention pooling. Texture, PRNU, color-correlation, and optical-aberration vectors are concatenated with the global representation before the final binary head. Temperature scaling converts the output into a calibrated `P(ai_generated)`.
+Most inputs pass through a frozen CLIP-ViT backbone with a lightweight binary head. Every runtime feature is extracted from the exact received view; matched JPEG normalization is offline dataset construction and is never rerun here. A global semantic view is combined with local crops selected before global model-size conversion. Frequency, PRNU, color-correlation, and optical-aberration features are fused only with validity and confidence masks. Temperature scaling converts the output into a calibrated `P(ai_generated)`.
+
+Offline comparisons may use `source_original` to measure native-forensics behavior, but the shipped model cannot depend on that unavailable view. The mandatory runtime comparisons are global-only CLIP, local-crop-only representation, global-plus-local CLIP, and received-view auxiliary fusion.
 
 ### Texture-aware local-detail path
 
 The texture path preserves local evidence that can disappear when an entire high-resolution image is resized to the backbone input. It does not attempt to hard-code hair, skin, foliage, text, or reflection defects.
 
-1. Compute a cheap multi-scale Laplacian/Sobel energy map on the current input.
-2. Select a small, fixed number of non-overlapping texture-rich patches, while retaining the global image view for context.
-3. Encode patches with the same live backbone or a small shared patch head; aggregate them with soft attention.
+1. Compute a cheap multi-scale Laplacian/Sobel energy map on the received image at its available resolution, before global CLIP conversion.
+2. Select a small, fixed number of non-overlapping texture-rich patches across the image, while retaining the global view for context; do not rely on one center crop.
+3. Pad patches when necessary, encode them with the same live backbone or a small shared patch head, and aggregate them with soft attention.
 4. Fuse the resulting texture vector with global CLIP, frequency, and PRNU features in the binary head.
 
 Energy selects where to look, not what verdict to produce. The head learns structural differences from labeled data. Raw sharpness, smoothness, edge density, LBP, GLCM, or OCR confidence must not be used as fixed authenticity thresholds.
@@ -134,8 +143,24 @@ The public JSON contains only `image_path` and `pred`. Diagnostics such as `verd
 - **Strict provenance:** authentic samples originate from genuine capture; AI samples are fully synthetic with no authentic source.
 - **Exclusions:** mixed-origin, image-to-image edits of authentic sources, inpainting of authentic images, face swaps, AI enhancement, compositing, and ambiguous provenance.
 - **Split integrity:** a clean source and every variant derived from it belong to one split only.
-- **Format matching:** balance resolution, aspect ratio, and file-format artifacts across both labels before drawing generator-family holdouts.
+- **Immutable original:** preserve exact source bytes and metadata for C2PA, audit, and native-forensics ablations; never overwrite this file.
+- **Canonical matched derivative:** decode and re-encode both labels with the same encoder, color conversion, chroma subsampling, metadata policy, and quality distribution sampled independently of label.
+- **Format matching:** balance resolution and aspect ratio, then verify that format and compression statistics are not label-predictive after matched preprocessing.
 - **Class balance:** keep the clean test set and every robustness set balanced between `authentic` and `ai_generated`, or report balanced accuracy if exact balance is impossible.
+
+```text
+source_original
+    |-- provenance and offline native-forensics ablations
+    `-- label-independent matched re-encode --> canonical clean derivative
+                                                |-- JPEG Q90
+                                                |-- JPEG Q70
+                                                |-- JPEG Q50
+                                                `-- JPEG Q30
+```
+
+Matched re-encoding is dataset baseline construction, not a benchmark transformation. Robustness variants are created independently from the canonical clean derivative; none is created from another transformed output.
+
+The shipped inference script does not repeat the matched pass. It receives one clean or transformed image, calls that input `received_view`, and runs every visual branch on it. Non-JPEG transform outputs are retained as arrays or stored losslessly so an extra codec operation is not introduced.
 
 ## 4. Independent Transformation Protocol
 
@@ -145,12 +170,14 @@ For every clean test image, construct separate variants for each parameter setti
 |---|---|
 | JPEG compression | quality 90, 70, 50, 30 |
 | Gaussian blur | sigma 0.5, 1.0, 2.0 |
-| Resize and restore | 0.5x, 0.25x |
+| Resize and restore | 0.5x and 0.25x; bilinear down and bilinear up to parent dimensions |
 | Gaussian noise | sigma 0.02, 0.05, 0.10 |
 | Color jitter | brightness/contrast/saturation +/-20% |
 | Center crop | retain 80% |
 
-Every cell above is its own evaluation set, created from the clean source. There are no cases such as JPEG plus resize, blur plus noise, repeated transformations, alpha overlays, or blends between consecutive outputs.
+Every cell above is its own evaluation set, created from the canonical matched clean derivative. There are no cases such as JPEG plus resize, blur plus noise, repeated benchmark transformations, alpha overlays, or blends between consecutive outputs.
+
+Resize-0.5x and resize-0.25x are separate rows. Each row is one compound down-and-up transform, its intermediate image is not scored, and its restored output is lossless. The library/version, antialias behavior, dimension rounding, color handling, and dtype handling are fixed before dataset generation.
 
 For color jitter, the authentic and AI-generated training copies use the same parameter ranges, probability, and random-sampling policy. Per-channel normalization is applied before correlation. This mitigates simple brightness/contrast shifts but does not neutralize saturation changes, so color-correlation and optics results are reported separately for the color-jitter row.
 

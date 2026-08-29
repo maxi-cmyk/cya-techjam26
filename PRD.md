@@ -50,12 +50,16 @@ Must maintain reasonable accuracy after realistic post-processing:
 |---|---|---|
 | JPEG Compression | quality 90, 70, 50, 30 | Social-media re-encode, messaging |
 | Gaussian Blur | σ = 0.5, 1.0, 2.0 | Out-of-focus |
-| Resize | 0.5×/0.25× then upscale | Thumbnail generation |
+| Resize round trip | 0.5× or 0.25× bilinear downsample, then bilinear restore to original dimensions | Thumbnail generation, CDN resize |
 | Gaussian Noise | σ = 0.02, 0.05, 0.10 | Low-light sensor noise |
 | Color Jitter | brightness/contrast/sat ±20% | Filter apps, auto-enhance |
 | Center Crop | crop 80% | Profile-picture cropping |
 
 Each transformed test sample is created directly from its clean source with **exactly one transform and one parameter setting**. Transformations must not be chained, mixed, composited, or overlaid. For example, the JPEG-50 set contains JPEG-50 only, not JPEG-50 followed by resize or blur.
+
+The brief does not specify resize interpolation, so the project declares bilinear interpolation for both steps. The 0.5× and 0.25× conditions are separate rows; each complete down-and-up round trip counts as one benchmark transform, and the intermediate image is not evaluated separately. Resize outputs retain the parent dimensions and are cached losslessly or kept as arrays so the resize row does not add JPEG compression.
+
+For primary-model experiments, `clean` means a canonical matched derivative created with a label-independent JPEG encoder and quality policy. The untouched downloaded or generated file remains an immutable `original` for C2PA and explicitly separated native-forensics ablations. Dataset normalization is baseline construction; each robustness row still applies exactly one benchmark transform to its matched clean parent.
 
 The product must not silently fail by defaulting to "real" when a transform destroys its detection signal — this failure mode must be measured and reported, not hidden.
 
@@ -75,6 +79,13 @@ The product must not silently fail by defaulting to "real" when a transform dest
 - **Texture ablation** — compare global CLIP, texture-only, CLIP + texture, CLIP + PRNU, and full fusion on clean data and every independent transformation row.
 - **Color/optics ablation** — compare RGB versus Lab correlation features, chromatic-aberration and radial-distortion coverage, feature-only discrimination, and incremental value in the full fused model for every transform row.
 - **Frequency-family matrix** — report frequency-only performance and fast-track coverage by known generator/decoder family and independent transform. Include a held-out family test and an `unknown` metadata bucket.
+- **Compression-bias audit** — measure how well format, dimensions, file size, estimated JPEG quality, quantization-table statistics, and feature validity predict the label before and after matched preprocessing.
+- **Matched-preprocessing ablation** — compare otherwise identical models trained on original/unmatched views and canonical matched derivatives, using the same split and seed.
+- **JPEG degradation table** — report clean and Q90/Q70/Q50/Q30 R.Acc., F.Acc., aggregate accuracy, ECE, and clean-to-degraded accuracy loss.
+- **Signal-family comparison** — report representation-level and low-level frequency-feature degradation separately under JPEG.
+- **Resize degradation table** — report clean, resize-0.5×, and resize-0.25× R.Acc., F.Acc., aggregate accuracy, ECE, authentic false-positive rate, synthetic false-negative rate, and clean-to-resized loss.
+- **Resize architecture ablation** — compare global-only CLIP, local-crop-only representation, and global-plus-local CLIP on both resize severities.
+- **Resize fast-track audit** — report Stage 1 precision and coverage on resized authentic images before enabling any frequency-based early exit.
 - **Error Analysis Note** — representative false positives/negatives and stated trade-offs.
 
 ### 4.5 Scoring
@@ -116,8 +127,10 @@ Model evaluation is weighted **50% accuracy and 50% robustness**, using the form
 - **Error analysis mechanics**: need a concrete script to pull top-10 false positives/negatives; decide whether this is reflected in the UI/demo and how human verification confirms "true" detection rate.
 - **Error handling**: no defined baseline yet for minimum image resolution or corruption detection (garbage-in handling).
 - **Dataset provenance**: each sample must be screened so mixed, AI-edited, or ambiguous-origin images do not enter either binary class.
+- **Compression-history shortcut**: authentic and generated sources may have systematically different save histories. Primary-model experiments must use label-independent matched derivatives, while immutable originals are retained for provenance and native-forensics ablations.
 - **PRNU limitation**: without multiple images from a known camera, the system cannot estimate or verify a device fingerprint. Its single-image coherence score is experimental evidence, not proof that an image is authentic.
 - **Transformation fragility**: JPEG, blur, resize, and added noise can severely weaken PRNU. Missing PRNU must never independently produce an `ai_generated` verdict, and PRNU must never act as an early-exit gate.
+- **Interpolation-artifact confusion**: resize restoration can introduce periodic or grid-aligned structure that frequency-sensitive features may mistake for generation evidence. Resampling evidence is auxiliary, and authentic false-positive changes must be reported for both resize rows.
 - **DSNU**: considered but deprioritized because reliable isolation normally needs dark-frame/reference calibration, while correction pipelines can suppress the signal. An exported single image provides neither the required reference nor a dependable residual.
 - **Texture shortcut risk**: absolute smoothness, edge density, OCR confidence, or any fixed threshold can confuse degraded authentic images with synthetic images. Texture evidence must be learned under independently transformed training copies and can never override the binary model by rule.
 - **Signal redundancy**: texture, frequency, and PRNU paths may capture overlapping low-level artifacts. Ablations must show that each retained path adds value to the locked 50/50 score.

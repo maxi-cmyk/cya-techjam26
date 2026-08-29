@@ -7,6 +7,7 @@ Breakdown of what is used, why it was chosen, and how it fits into the pipeline.
 ### Frozen CLIP ViT-L/14 — linear-probe detector
 - **What:** OpenAI CLIP's vision tower, frozen, with a lightweight linear/MLP head trained on top.
 - **Why chosen over alternatives:** most degradation-robust known detector family (UnivFD/CLIPDetection-style results hold up far better under JPEG-50 than frequency/patch-artifact methods); CLIP's web-pretraining gives it inherent robustness to noisy, degraded images; generalizes best cross-generator (+15 mAP on unseen generators vs. from-scratch CNNs/ViTs).
+- **JPEG rationale:** compression preferentially removes high-frequency information where many generator-specific fingerprints reside. CLIP therefore supplies the principal representation-level signal; frequency, texture, PRNU, color, and optics remain auxiliary features that must demonstrate incremental value after JPEG matching and degradation.
 - **Size:** ~304M params (ViT-L/14@336px vision tower only — the text encoder is unused and excluded from the inference budget). A ViT-B/32 variant (~86–87.5M) is a smaller fallback if resource-constrained further.
 - **Reference implementations to build from:**
   - `WisconsinAIVision/UniversalFakeDetect` (UnivFD, CVPR 2023) — canonical CLIP linear-probe.
@@ -40,6 +41,7 @@ Breakdown of what is used, why it was chosen, and how it fits into the pipeline.
 - **Metadata:** record generator paradigm, model/checkpoint version, decoder/tokenizer family, and known upsampling factor. Unknown values remain `unknown`.
 - **Fast-track gate:** require pre-agreed high precision on locked authentic images, held-out generator families/checkpoints, and all applicable independent transforms before enabling. Otherwise every image falls through to Stage 2.
 - **Why conservative:** JPEG, blur, resize, architectural changes, spectral regularization, and explicit artifact suppression can erase or alter the signal. Absence of an expected peak is neutral.
+- **JPEG-focused ablation:** compare phase-spectrum and magnitude-spectrum features separately; phase is a candidate for greater compression stability, not an assumed universal detector.
 
 ## 4. Stage 2 — Main Classification Heads (all sit on the frozen CLIP backbone)
 
@@ -109,17 +111,33 @@ The binary head is the only classification head. Face-, edit-, and mixed-content
 
 Mixed-origin, AI-edited, face-swapped, composited, and ambiguous-provenance samples must be filtered out of both labels.
 
-## 6. Transformation Pipeline
+## 6. Dataset Normalization and Transformation Pipeline
 
-Applied uniformly to both binary labels. For evaluation, every variant starts from the clean source and receives exactly one transformation with one parameter setting:
+### Dataset normalization
+
+Preserve immutable source bytes for provenance and offline native-forensics ablations. Create the canonical primary-model view by decoding and re-encoding both labels with an identical, label-independent policy. Version and record the JPEG library, RGB conversion behavior, quality, chroma subsampling, progressive/baseline mode, and metadata handling. Compare fixed Q96 with a narrow high-quality distribution such as Q95-Q100 before freezing the policy. This matched pass is never rerun by the inference script.
+
+### Training robustness augmentation
+
+Generate one independently sampled robustness variant from the canonical matched clean parent when the sampler selects a transformed example. Use the same cell probabilities, parameter distributions, and seeds for both labels. Matched normalization removes compression-history bias; augmentation teaches degradation tolerance.
+
+### Independent evaluation transformations
+
+Applied uniformly to both binary labels. For evaluation, every variant starts from the canonical matched clean derivative and receives exactly one benchmark transformation with one parameter setting:
 - JPEG re-encode: quality 90/70/50/30
 - Gaussian blur: σ 0.5/1.0/2.0
-- Resize: 0.5×/0.25× then upscale
+- Resize: 0.5× or 0.25× bilinear downsample, then bilinear restore to exact parent dimensions
 - Gaussian noise: σ 0.02/0.05/0.10
 - Color jitter: brightness/contrast/saturation ±20%
 - Center crop: 80%
 
-No test image may combine, chain, or overlay transformations. Training augmentation should mirror this one-transform-at-a-time protocol when producing samples intended to match the benchmark.
+No test image may combine, chain, or overlay benchmark transformations. Dataset normalization is baseline construction and does not change the rule that each robustness row contains exactly one benchmark transformation.
+
+### Resize implementation contract
+
+Use one pinned library and version with bilinear interpolation in both directions. Lock antialiasing, intermediate-dimension rounding, RGB/channel handling, dtype/range conversion, and exact restoration dimensions. Keep transformed pixels as arrays or save them losslessly; do not JPEG-encode a resize result. Area-to-bicubic, nearest-neighbor, and Lanczos are optional sensitivity ablations, not primary benchmark settings.
+
+The shipped detector never generates resize variants or repeats matched JPEG normalization. It processes the exact received view. The global branch performs the required CLIP input conversion, while the local branch selects multiple detail-rich crops at available resolution before that conversion and pads them when needed.
 
 For color jitter, both labels use the same brightness/contrast/saturation parameter distributions and sampling probability. RGB/Lab correlation, chromatic-aberration, and radial-distortion outputs are reported separately on that row because color jitter directly perturbs channel statistics and may reduce edge-fit quality.
 
@@ -132,6 +150,8 @@ For color jitter, both labels use the same brightness/contrast/saturation parame
 - **Texture diagnostics:** texture-only, CLIP + texture, CLIP + PRNU, and full-fusion accuracy; report R.Acc./F.Acc. and overlap with frequency/PRNU signals.
 - **Color/optics diagnostics:** RGB-only, Lab-only, chromatic-aberration-only, eligible radial-distortion-only, incremental fusion results, and fit validity/coverage for every transform row.
 - **Frequency diagnostics:** frequency-only R.Acc./F.Acc., per-family/checkpoint recall, candidate fast-track precision/coverage, and degradation for every independent transform row.
+- **Compression-bias diagnostics:** nuisance-only label predictiveness before and after matching, plus original/unmatched CLIP, matched-view CLIP, and same-received-view fusion ablations.
+- **Resize diagnostics:** global-only, local-only, and global-plus-local accuracy; authentic false-positive rate; synthetic false-negative rate; and Stage 1 fast-track precision/coverage for resize-0.5× and resize-0.25×.
 
 ## 8. External / Commercial APIs (Offline-Comparison Baselines Only — Never in the Inference Path)
 
