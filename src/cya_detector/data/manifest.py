@@ -68,6 +68,10 @@ MANIFEST_FIELDS = [
     "c2pa_status",
     "c2pa_validation_state",
     "corruption_error",
+    "parent_sha256",
+    "realized_parameters",
+    "transform_version",
+    "preprocessing_version",
 ]
 
 BINARY_LABEL_ALIASES = {

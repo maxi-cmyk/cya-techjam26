@@ -55,6 +55,35 @@
       "label_independent": true
     }
   },
+  "transform_engine": {
+    "version": "task3-v1",
+    "preprocessing_version": "clip-crop-v1",
+    "resize_library": "Pillow",
+    "resize_interpolation": "bilinear",
+    "resize_filtering": "pillow_bilinear_fixed",
+    "dimension_rounding": "floor(d * scale + 0.5)",
+    "jpeg_storage": "JPEG",
+    "non_jpeg_storage": "PNG",
+    "padding": "symmetric_zero"
+  },
+  "training_policy": {
+    "controlled": {
+      "enabled": true,
+      "clean_fraction": 0.5,
+      "transformed_fraction": 0.5,
+      "balance_labels": true,
+      "uniform_transform_cells": true
+    },
+    "safe": {
+      "enabled": false,
+      "horizontal_flip_probability": 0.5,
+      "color_jitter_fraction": 0.5,
+      "rotation_degrees": 180,
+      "mask_patch_size": 16,
+      "mask_max_fraction": 0.75,
+      "mask_probability": 0.5
+    }
+  },
   "benchmark_transforms": {
     "allow_chaining": false,
     "jpeg_quality": [90, 70, 50, 30],

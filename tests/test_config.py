@@ -5,14 +5,16 @@ import unittest
 from pathlib import Path
 
 from cya_detector.config import ConfigError, load_config, validate_config
+from cya_detector.data.manifest import MANIFEST_FIELDS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH = REPO_ROOT / "configs/colab.json"
 
 
 class ConfigTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.config = load_config(REPO_ROOT / "configs/colab.json")
+        self.config = load_config(CONFIG_PATH)
 
     def test_colab_config_is_valid(self) -> None:
         self.assertEqual(self.config["schema_version"], 1)
@@ -41,6 +43,35 @@ class ConfigTests(unittest.TestCase):
         candidate["dataset"]["split_fractions"]["seed_train"] = 0.5
         with self.assertRaises(ConfigError):
             validate_config(candidate)
+
+    def test_task3_contract_is_frozen(self) -> None:
+        config = load_config(CONFIG_PATH)
+        engine = config["transform_engine"]
+        self.assertEqual(engine["version"], "task3-v1")
+        self.assertEqual(engine["preprocessing_version"], "clip-crop-v1")
+        self.assertEqual(engine["resize_library"], "Pillow")
+        self.assertEqual(engine["resize_interpolation"], "bilinear")
+        self.assertEqual(engine["resize_filtering"], "pillow_bilinear_fixed")
+        self.assertEqual(engine["dimension_rounding"], "floor(d * scale + 0.5)")
+        self.assertEqual(engine["jpeg_storage"], "JPEG")
+        self.assertEqual(engine["non_jpeg_storage"], "PNG")
+        self.assertEqual(engine["padding"], "symmetric_zero")
+
+    def test_training_policies_are_mutually_exclusive(self) -> None:
+        config = load_config(CONFIG_PATH)
+        config["training_policy"]["controlled"]["enabled"] = True
+        config["training_policy"]["safe"]["enabled"] = True
+        with self.assertRaisesRegex(ConfigError, "mutually exclusive"):
+            validate_config(config)
+
+    def test_task3_provenance_fields_are_frozen(self) -> None:
+        for field in (
+            "parent_sha256",
+            "realized_parameters",
+            "transform_version",
+            "preprocessing_version",
+        ):
+            self.assertIn(field, MANIFEST_FIELDS)
 
 
 if __name__ == "__main__":

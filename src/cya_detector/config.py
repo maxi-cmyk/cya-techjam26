@@ -18,6 +18,8 @@ REQUIRED_SECTIONS = {
     "dataset",
     "model",
     "preprocessing",
+    "transform_engine",
+    "training_policy",
     "benchmark_transforms",
     "features",
     "optimization",
@@ -31,6 +33,18 @@ EXPECTED_TRANSFORMS = {
     "gaussian_noise_sigma": [0.02, 0.05, 0.1],
     "color_jitter_fraction": 0.2,
     "center_crop_fraction": 0.8,
+}
+
+EXPECTED_TRANSFORM_ENGINE = {
+    "version": "task3-v1",
+    "preprocessing_version": "clip-crop-v1",
+    "resize_library": "Pillow",
+    "resize_interpolation": "bilinear",
+    "resize_filtering": "pillow_bilinear_fixed",
+    "dimension_rounding": "floor(d * scale + 0.5)",
+    "jpeg_storage": "JPEG",
+    "non_jpeg_storage": "PNG",
+    "padding": "symmetric_zero",
 }
 
 
@@ -79,6 +93,34 @@ def validate_config(config: dict[str, Any]) -> None:
         if transforms.get(name) != expected:
             raise ConfigError(f"Unexpected {name}: expected {expected!r}")
 
+    transform_engine = config["transform_engine"]
+    for name, expected in EXPECTED_TRANSFORM_ENGINE.items():
+        if transform_engine.get(name) != expected:
+            raise ConfigError(f"Unexpected transform_engine.{name}: expected {expected!r}")
+
+    training_policy = config["training_policy"]
+    controlled = training_policy.get("controlled", {})
+    safe = training_policy.get("safe", {})
+    if controlled.get("enabled") == safe.get("enabled"):
+        raise ConfigError("Training policies must be mutually exclusive")
+
+    clean_fraction = controlled.get("clean_fraction")
+    transformed_fraction = controlled.get("transformed_fraction")
+    if clean_fraction is None or transformed_fraction is None or abs(
+        clean_fraction + transformed_fraction - 1.0
+    ) > 1e-9:
+        raise ConfigError("Controlled training fractions must sum to 1.0")
+
+    for name in (
+        "horizontal_flip_probability",
+        "color_jitter_fraction",
+        "mask_max_fraction",
+        "mask_probability",
+    ):
+        value = safe.get(name)
+        if not isinstance(value, (int, float)) or not 0.0 <= value <= 1.0:
+            raise ConfigError(f"Safe training policy {name} must be between 0.0 and 1.0")
+
     evaluation = config["evaluation"]
     if evaluation.get("clean_weight") != 0.5 or evaluation.get("robustness_weight") != 0.5:
         raise ConfigError("Evaluation weights must remain 50/50")
@@ -87,6 +129,8 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("Frequency fast-track must be disabled in the base configuration")
 
     model = config["model"]
+    if model.get("input_size") != 336:
+        raise ConfigError("The CLIP input size must remain 336")
     if model.get("freeze_backbone") is not True:
         raise ConfigError("The base configuration must freeze the CLIP backbone")
     if model.get("input_size") != config["preprocessing"].get("train_crop_size"):
