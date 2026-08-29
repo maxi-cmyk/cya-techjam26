@@ -11,7 +11,7 @@ from typing import Any
 from PIL import Image, ImageEnhance
 
 from cya_detector.transforms.benchmark import TransformResult
-from cya_detector.transforms.preprocessing import random_crop_input
+from cya_detector.transforms.preprocessing import pad_to_minimum
 
 _SUBSEED_NAMES = ("crop", "flip", "jitter", "rotation", "mask")
 
@@ -73,6 +73,36 @@ def _grid_boxes(size: int, patch_size: int) -> list[tuple[int, int, int, int]]:
     ]
 
 
+def _pad_and_random_crop(
+    image: Image.Image,
+    size: int,
+    *,
+    seed: int,
+) -> tuple[Image.Image, dict[str, list[int]]]:
+    pre_pad_width, pre_pad_height = image.size
+    padded = pad_to_minimum(image, size)
+    padded_width, padded_height = padded.size
+    pad_left = (padded_width - pre_pad_width) // 2
+    pad_top = (padded_height - pre_pad_height) // 2
+    padding = [
+        pad_left,
+        pad_top,
+        padded_width - pre_pad_width - pad_left,
+        padded_height - pre_pad_height - pad_top,
+    ]
+
+    generator = random.Random(seed)
+    crop_left = generator.randint(0, padded_width - size)
+    crop_top = generator.randint(0, padded_height - size)
+    crop_box = [crop_left, crop_top, crop_left + size, crop_top + size]
+    return padded.crop(tuple(crop_box)), {
+        "pre_pad_size": [pre_pad_width, pre_pad_height],
+        "padded_size": [padded_width, padded_height],
+        "padding": padding,
+        "crop_box": crop_box,
+    }
+
+
 def _apply_mask(
     image: Image.Image,
     settings: SafeSettings,
@@ -119,7 +149,11 @@ def apply_safe(
         raise SafePolicyError("SAFE is training-only and requires phase='seed_train'")
 
     seeds = _derive_subseeds(project_seed, epoch, sample_id)
-    transformed = random_crop_input(image, settings.input_size, seed=seeds["crop"])
+    transformed, crop_provenance = _pad_and_random_crop(
+        image,
+        settings.input_size,
+        seed=seeds["crop"],
+    )
 
     flipped = random.Random(seeds["flip"]).random() < settings.flip_probability
     if flipped:
@@ -155,16 +189,16 @@ def apply_safe(
         transformed,
         {
             "order": [
+                "pad",
                 "random_crop",
                 "horizontal_flip",
-                "brightness",
-                "contrast",
-                "saturation",
+                "color_jitter",
                 "rotation",
                 "mask",
             ],
             "settings": asdict(settings),
             "seeds": seeds,
+            **crop_provenance,
             "flipped": flipped,
             "brightness": brightness,
             "contrast": contrast,

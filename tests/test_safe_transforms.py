@@ -106,11 +106,10 @@ class SafeTransformTests(unittest.TestCase):
         self.assertEqual(
             realized["order"],
             [
+                "pad",
                 "random_crop",
                 "horizontal_flip",
-                "brightness",
-                "contrast",
-                "saturation",
+                "color_jitter",
                 "rotation",
                 "mask",
             ],
@@ -130,11 +129,7 @@ class SafeTransformTests(unittest.TestCase):
         self.assertEqual(realized["rotation_interpolation"], "bilinear")
         self.assertEqual(realized["rotation_fill"], [0, 0, 0])
 
-        from cya_detector.transforms.preprocessing import random_crop_input
-
-        expected = random_crop_input(
-            self.image, self.settings.input_size, seed=realized["seeds"]["crop"]
-        )
+        expected = self.image.crop((5, 4, 37, 36))
         if realized["flipped"]:
             expected = expected.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         expected = ImageEnhance.Brightness(expected).enhance(realized["brightness"])
@@ -149,6 +144,30 @@ class SafeTransformTests(unittest.TestCase):
         for box in realized["mask_boxes"]:
             expected.paste((0, 0, 0), box)
         self.assertEqual(result.image.tobytes(), expected.tobytes())
+
+    def test_realized_padding_and_crop_bounds_match_literal_fixture_geometry(self) -> None:
+        source = self.gradient(width=24, height=40)
+        settings = SafeSettings(
+            input_size=32,
+            flip_probability=0.0,
+            color_jitter_fraction=0.0,
+            rotation_degrees=0.0,
+            mask_patch_size=8,
+            mask_max_fraction=0.75,
+            mask_probability=0.0,
+        )
+
+        result = apply_safe(source, settings, "geometry", 42, 0, phase="seed_train")
+
+        self.assertEqual(result.realized.get("pre_pad_size"), [24, 40])
+        self.assertEqual(result.realized.get("padded_size"), [32, 40])
+        self.assertEqual(result.realized.get("padding"), [4, 0, 4, 0])
+        self.assertEqual(result.realized.get("crop_box"), [0, 6, 32, 38])
+
+        expected_padded = Image.new("RGB", (32, 40), (0, 0, 0))
+        expected_padded.paste(source, (4, 0))
+        expected_crop = expected_padded.crop((0, 6, 32, 38))
+        self.assertEqual(result.image.tobytes(), expected_crop.tobytes())
 
 
 class TrainingPolicyValidationTests(unittest.TestCase):
