@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from cya_detector.models.clip_baseline import embedding_cache_key
+from cya_detector.models.clip_baseline import embedding_cache_key, resolve_hugging_face_revision
 
 
 class ClipBaselineContractTests(unittest.TestCase):
@@ -29,6 +29,12 @@ class ClipBaselineContractTests(unittest.TestCase):
                 preprocessing_version="v1",
                 view_identifier="clean",
             )
+
+    def test_commit_revision_does_not_require_network_resolution(self) -> None:
+        commit = "0123456789abcdef0123456789abcdef01234567"
+        self.assertEqual(
+            resolve_hugging_face_revision("organization/model", revision=commit), commit
+        )
 
 
 if __name__ == "__main__":

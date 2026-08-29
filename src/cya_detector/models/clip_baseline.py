@@ -65,12 +65,8 @@ def load_frozen_clip(
 
     torch, processor_type, model_type = require_ml_dependencies()
     selected_device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    model = model_type.from_pretrained(identifier, revision=revision)
-    resolved = getattr(model.config, "_commit_hash", None) or revision
-    if revision in {"main", "master"} and resolved == revision:
-        raise RuntimeError(
-            "The model host did not expose a resolved commit; refusing to create mutable caches"
-        )
+    resolved = resolve_hugging_face_revision(identifier, revision=revision)
+    model = model_type.from_pretrained(identifier, revision=resolved)
     processor = processor_type.from_pretrained(identifier, revision=resolved)
     model.eval()
     for parameter in model.parameters():
@@ -88,6 +84,24 @@ def load_frozen_clip(
         resolved_revision=resolved,
         embedding_dimension=dimension,
     )
+
+
+def resolve_hugging_face_revision(identifier: str, *, revision: str) -> str:
+    """Resolve mutable Hub branches to an immutable commit before loading or caching."""
+
+    if len(revision) >= 7 and all(character in "0123456789abcdef" for character in revision.lower()):
+        return revision
+    try:
+        from huggingface_hub import model_info
+
+        resolved = model_info(identifier, revision=revision).sha
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not resolve {identifier}@{revision} to an immutable Hugging Face commit"
+        ) from exc
+    if not resolved:
+        raise RuntimeError(f"Hugging Face returned no commit for {identifier}@{revision}")
+    return resolved
 
 
 def build_binary_head(embedding_dimension: int, *, hidden_dimension: int | None = None) -> Any:

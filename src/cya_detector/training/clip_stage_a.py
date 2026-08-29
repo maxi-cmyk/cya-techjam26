@@ -91,16 +91,24 @@ def extract_embeddings(
         torch.cuda.reset_peak_memory_stats()
     started = time.perf_counter()
     if missing:
+        from tqdm.auto import tqdm
+
         loader = torch.utils.data.DataLoader(
             ClipImageDataset(missing, loaded_clip.processor),
             batch_size=batch_size,
             shuffle=False,
-            num_workers=2,
+            num_workers=0,
             pin_memory=device.startswith("cuda"),
             collate_fn=_collate_images,
         )
         with torch.inference_mode():
-            for batch in loader:
+            for batch in tqdm(
+                loader,
+                total=len(loader),
+                desc=f"CLIP {matching_policy}",
+                unit="batch",
+                dynamic_ncols=True,
+            ):
                 pixels = batch["pixel_values"].to(device, non_blocking=True)
                 precision_context = (
                     torch.autocast(device_type="cuda", dtype=torch.float16)
