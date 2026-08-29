@@ -23,6 +23,60 @@ Training must preserve these rules:
 
 R.Acc. and F.Acc. remain mandatory guardrails even when the aggregate score improves.
 
+### 1.1 Trainability audit
+
+The architecture is trainable, but the word **parameter** must be used carefully. The benchmark transform values are augmentation settings, not learned weights. Likewise, most forensic extractors are fixed algorithms whose outputs are learned by a small downstream projection/fusion head.
+
+| Component | What is learned | Supervision currently available | Feasibility decision |
+|---|---|---|---|
+| Frozen CLIP baseline | Linear/MLP binary head | Binary authentic/AI labels | **Ready once data and pretrained weights are acquired** |
+| RINE-style layer fusion | Layer-importance estimator and binary head | Binary authentic/AI labels | **Trainable** with CLIP frozen |
+| Texture path | Patch aggregation/attention and fusion weights | Binary labels on clean and independently transformed views | **Trainable**, but patch selection itself is deterministic and patch count/size are validation hyperparameters |
+| Frequency path | Feature projection, fusion weights, and an optional frequency-only classifier | Binary labels plus generator/decoder metadata for stratified validation | **Trainable as an auxiliary path**; FFT/DCT and residual statistics themselves have no learned weights |
+| PRNU-coherence path | Feature projection and fusion weights | Binary labels only | **Trainable only as classification fusion**; the current data cannot train or verify a camera fingerprint without device IDs and multi-image camera references |
+| RGB/Lab correlation path | Feature projection and fusion weights | Binary labels on matched jitter distributions | **Trainable as fusion**; channel-correlation extraction remains deterministic |
+| Chromatic-aberration/radial-distortion path | Feature projection and fusion weights | Binary labels and extractor confidence, but no lens/camera calibration ground truth | **Trainable as fusion only**; the optical fit must remain deterministic or be validated on a separate calibrated dataset |
+| Stage 1 early exit | Frequency-only scorer and a fixed threshold selected on validation | Binary labels, held-out generator strata, and independent transforms | **Possible but disabled by default** until the precision/coverage gate passes |
+| Temperature scaling | One scalar temperature | Clean `selection_val` logits and labels | **Trainable after checkpoint selection** |
+| Selective CLIP fine-tuning | Adapters or final vision blocks | Binary labels | **Conditional** on an actual GPU/VRAM/time check; not required for the viable baseline |
+| ConvNeXt-Tiny comparison | Full comparison model | Binary labels | **Possible but optional** and lower priority than proving the frozen-CLIP pipeline |
+| C2PA verification | Nothing | Signed provenance manifest | **Not a training task** |
+| JPEG/blur/resize/noise/jitter/crop values | Nothing | Fixed by the challenge protocol | **Not trainable**; they are sampled augmentation/evaluation settings |
+
+The authentic/AI label is enough to learn whether a deterministic auxiliary vector adds predictive value. It is not enough to claim that the underlying PRNU, chromatic-aberration, or lens-distortion estimate is physically correct. Those extractors must therefore remain confidence-masked experimental inputs and pass the locked ablations before shipping.
+
+### 1.2 Dataset support by signal
+
+The named datasets do not support every feature equally:
+
+| Data source | Suitable use | Restriction |
+|---|---|---|
+| SID_Set | Primary high-resolution binary pool after filtering | Keep only authentic and fully synthetic rows; exclude its tampered class entirely |
+| GenImage | Binary training/evaluation and generator holdouts | Preserve generator subsets and source grouping; do not treat multiple derivatives as independent sources |
+| WildFake | Generator/architecture/version stratification | Acquire and verify the exact released hierarchy/licenses, then retain only fully synthetic and authentic branches |
+| CIFAKE | Low-resolution stress test or quick backbone smoke test | Its 32x32 sources are ineligible for PRNU, chromatic aberration, radial distortion, CFA periodicity, and primary texture training; upscaling does not recreate those signals |
+| COCO plus DALL-E benchmark subsets | External clean/robustness comparison | Validation-only as already declared; never use for head fitting, calibration, or feature selection |
+| Chameleon | Final stress-test comparison | Do not use for training or retention decisions |
+
+Every row must include a per-feature eligibility mask derived from source resolution, provenance, processing history when known, and extractor support. Eligibility rules are fixed before model comparison and applied identically to both labels. Low-resolution images may still train the CLIP head, but they must not teach the fusion head that a missing physical feature implies either class.
+
+High resolution does not prove that sensor or lens traces survived. Social-media and ImageNet-derived authentic files may already have been resized, denoised, sharpened, corrected, or re-encoded. Until a provenance-preserving authentic subset with near-native camera exports is identified, PRNU and optics are **unvalidated research ablations**, not dependable training signals. A classifier improvement on source-confounded web data is insufficient evidence to retain them.
+
+### 1.3 Current readiness status
+
+This repository currently contains architecture documents only: no downloaded dataset, frozen manifest, pretrained checkpoint, feature cache, training environment, or measured hardware budget is present. The design is therefore **architecturally trainable but not yet execution-ready**.
+
+The minimum evidence required before claiming training readiness is:
+
+1. acquire a licensed binary subset and confirm class counts after tampered/mixed/ambiguous rows are removed;
+2. audit native dimensions, formats, source groups, generator metadata, and exact/near duplicates;
+3. materialize the label-independent matched-clean views and independent transform rows;
+4. measure feature eligibility/coverage by label, dataset, and transform before fitting fusion weights;
+5. run a small CLIP embedding-extraction pilot to measure throughput, peak memory, and cache size on the actual machine;
+6. freeze the manifest/splits and only then train Stage A.
+
+The minimum viable training path is Stage A, followed by Stage B and one-at-a-time auxiliary fusion. PRNU, optical features, texture crops, the frequency fast-track, self-training, and CLIP fine-tuning are retention-gated experiments—not dependencies for producing a valid detector.
+
 ## 2. Dataset Manifest
 
 Create one immutable manifest before training. Each row represents a clean source or one independently transformed variant.
@@ -106,22 +160,32 @@ Never use `final_test` for:
 - early stopping;
 - Stage 1 fast-track thresholds.
 
-## 4. Original, Matched Clean, and Independent Transform Generation
+## 4. Training Augmentations and Independent Transform Generation
 
 Keep every ingested original immutable. Before any re-encoding, run C2PA on the original bytes and preserve the metadata needed for provenance auditing. Native PRNU, frequency, color, and optics features may be extracted from this original view for an explicitly separated ablation.
 
 Create a canonical matched clean derivative for primary-model training by decoding and re-encoding both labels with the same encoder, color conversion, chroma subsampling, metadata policy, and quality distribution. Every setting must be sampled independently of the label. Start by comparing fixed Q96 with a narrow high-quality distribution such as Q95-Q100; select the policy on the locked bias audit and held-out results rather than clean accuracy alone.
 
-Generate each robustness variant directly from its canonical matched clean parent:
+Generate each robustness variant directly from its canonical matched clean parent. These same controlled variants are selected randomly during training to simulate redistribution:
 
-| Transform | Parameter cells |
-|---|---|
-| JPEG | quality 90, 70, 50, 30 |
-| Gaussian blur | sigma 0.5, 1.0, 2.0 |
-| Resize and restore | 0.5x and 0.25x; bilinear down and bilinear up |
-| Gaussian noise | sigma 0.02, 0.05, 0.10 on normalized pixels |
-| Color jitter | brightness/contrast/saturation within +/-20% |
-| Center crop | retain 80% |
+| Transform | Parameter cells | Real-world analogue |
+|---|---|---|
+| JPEG compression | quality = 90, 70, 50, 30 | Social-media re-encoding and messaging |
+| Gaussian blur | sigma = 0.5, 1.0, 2.0 | Out-of-focus capture and screenshot smoothing |
+| Resize and restore | 0.5x and 0.25x; bilinear down and bilinear up | Thumbnail generation and CDN resizing |
+| Gaussian noise | sigma = 0.02, 0.05, 0.10 on normalized pixels | Low-light sensor noise |
+| Color jitter | brightness/contrast/saturation within +/-20% | Filter apps and auto-enhancement |
+| Center crop | crop 80% | Profile-picture cropping and reframing |
+
+“Randomly” means sampling from this table, not constructing an arbitrary augmentation chain:
+
+- a training draw is either clean or receives exactly one transform;
+- a transformed draw selects one transform-and-parameter cell;
+- no second benchmark transform is applied afterward;
+- the exact transform, realized parameters, and random seed are logged;
+- both labels use the same transform probabilities and parameter distributions.
+
+Variants may be materialized ahead of time or generated on demand. Ahead-of-time variants are selected randomly by the sampler. On-demand variants must be deterministic from `source_id`, run seed, transform, and parameter, and the realized values must be written to the run manifest.
 
 Color jitter is one named benchmark operation even when it changes brightness, contrast, and saturation together. It must not be followed by another benchmark transform.
 
@@ -273,7 +337,7 @@ These are reproducible starting points, not fixed claims of optimality:
 | Fusion/texture learning rate | `3e-4` |
 | Unfrozen CLIP learning rate | `1e-5` |
 | Weight decay | `1e-4` |
-| Effective batch size | 32, or largest stable equivalent via accumulation |
+| Effective batch size | Target 32 via accumulation; choose the physical microbatch only after a hardware probe |
 | Warmup | 5% of optimizer steps |
 | Gradient clipping | 1.0 |
 | Head-training limit | 20 epochs |
@@ -282,6 +346,8 @@ These are reproducible starting points, not fixed claims of optimality:
 | Random seeds | At least 3 for retained candidates |
 
 Use mixed precision when supported. Do not apply label smoothing initially because probability calibration is a required output. If class-balanced sampling is used, report ordinary challenge accuracy—not sampler-weighted accuracy.
+
+These values configure optimization; they do not establish compute feasibility. Frozen-backbone head training should use cached embeddings where the image views are fixed. Global plus `k` local CLIP views require approximately `1 + k` image encodes per sample even though they do not add another backbone, so texture experiments begin only after measuring this cost on a representative pilot. Any on-demand stochastic augmentation invalidates the corresponding embedding cache and must be included in the throughput estimate.
 
 ## 10. Validation, Checkpointing, and Retention Gates
 

@@ -83,6 +83,8 @@ Only samples with clear source provenance are eligible:
 
 Each source has an immutable `source_original`, a canonical `matched_clean` derivative, and zero or more `robustness_variant` derivatives. These are offline dataset views. The shipped model accepts one `received_view` and does not require its pre-transform source. Every offline view derived from one source remains in the same split to prevent leakage.
 
+Binary labels supervise the final classification and fusion weights; they do not provide camera-fingerprint, lens-model, or true-aberration ground truth. PRNU and optical extractors therefore remain fixed, confidence-masked estimators unless a separately calibrated dataset is added. CIFAKE-scale 32x32 images are permitted for a backbone stress test but are ineligible for PRNU, CFA, chromatic-aberration, radial-distortion, and primary texture-feature training.
+
 The manifest records at least `source_id`, `parent_id`, `source_path`, `image_path`, `image_view`, `normalization_codec`, `normalization_quality`, `encoder_version`, `chroma_subsampling`, `original_format`, `estimated_original_quality`, and `quantization_table_hash`. Normalization settings are sampled independently of the label.
 
 The required primary-model comparison is:
