@@ -40,11 +40,13 @@
   },
   "model": {
     "identifier": "openai/clip-vit-large-patch14-336",
+    "revision": "main",
     "input_size": 336,
     "freeze_backbone": true,
     "output": "p_ai_generated"
   },
   "preprocessing": {
+    "version": "clip-image-processor-336-v1",
     "input_policy": "crop",
     "train_crop_size": 336,
     "validation_crop_size": 336,
@@ -92,6 +94,7 @@
     "clean_weight": 0.5,
     "robustness_weight": 0.5,
     "threshold": 0.5,
+    "bootstrap_iterations": 1000,
     "calibration": "temperature_scaling_clean_selection_val",
     "final_test_locked": true
   }

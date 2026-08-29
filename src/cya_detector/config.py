@@ -91,3 +91,12 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("The base configuration must freeze the CLIP backbone")
     if model.get("input_size") != config["preprocessing"].get("train_crop_size"):
         raise ConfigError("Training crop size must match the CLIP input size")
+    if not model.get("revision"):
+        raise ConfigError("A requested model revision is required")
+    if not config["preprocessing"].get("version"):
+        raise ConfigError("A preprocessing version is required for embedding caches")
+    if config["evaluation"].get("bootstrap_iterations", 0) < 2:
+        raise ConfigError("At least two bootstrap iterations are required")
+    warmup_fraction = config["optimization"].get("warmup_fraction")
+    if warmup_fraction is None or not 0.0 <= warmup_fraction < 1.0:
+        raise ConfigError("Warmup fraction must be in [0, 1)")

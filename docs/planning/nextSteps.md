@@ -82,7 +82,7 @@ Safe work available immediately for other teammates: Task 3, Task 5, the Task 4 
 
 Task 1 implementation is complete. The first connected Colab GPU session must still run `make install-colab`, `make smoke`, and record the assigned accelerator before Task 2 data work begins.
 
-[ ] **Task 2 — Reconcile the supplied SID data with the agreed dataset contract** *(in progress: tooling tested; real Drive run pending)*
+[x] **Task 2 — Reconcile the supplied SID data with the agreed dataset contract** *(verified in Colab on the full SID handoff)*
 
   - [x] Implement immutable-source inventory, corruption checking, dimensions/formats, SHA-256, color-aware perceptual hashes, and optional strict 20,000-row verification.
   - [x] Implement fail-closed SID label mapping; keep only `real`/`authentic` and `synthetic`/`ai_generated`, and exclude label `2`, tampered, mixed, edited, and ambiguous rows.
@@ -94,9 +94,11 @@ Task 1 implementation is complete. The first connected Colab GPU session must st
   - [x] Implement nuisance-only label-predictiveness audits and 1,000-per-label policy pilots.
   - [x] Implement deterministic 60/25/7.5/7.5 grouped splits and persist source/output manifest hashes.
   - [x] Add `01_task2_data_contract.ipynb`, Make targets, and fixture tests covering filtering, corruption, duplicates, cross-label conflicts, splitting, matched encoding, and nuisance metrics.
-  - [ ] Run the Task 2 notebook against `/content/hackathon_data/raw/sid_set` in Colab and resolve any failed source-audit gate.
-  - [ ] Preserve both matched-policy pilot reports for the Stage A comparison; do not select from nuisance accuracy alone.
-  - [ ] Complete when real-data manifests/reports are copied to Drive and their hashes, class counts, C2PA statuses, duplicate findings, and nuisance results have been reviewed.
+  - [x] Run the Task 2 notebook against `/content/hackathon_data/raw/sid_set` in Colab and resolve any failed source-audit gate.
+  - [x] Preserve both matched-policy pilot reports for the Stage A comparison; do not select from nuisance accuracy alone.
+  - [x] Complete when real-data manifests/reports are copied to Drive and their hashes, class counts, C2PA statuses, duplicate findings, and nuisance results have been reviewed.
+
+Task 2's recorded Colab run processed 20,000 rows with 10,000 images per source label, zero corrupt files, zero cross-label duplicate groups, 106 duplicate groups, and 19,882 eligible primary images. C2PA returned `no_manifest` for all inputs without dependency or scan failures. The split contains 11,929 `seed_train`, 4,971 `self_train_pool`, 1,491 `selection_val`, and 1,491 sealed `final_test` images. Source nuisance ROC-AUC was 0.737; the 2,000-image fixed-Q96 and uniform-Q95–100 pilots produced nuisance ROC-AUC values of 0.710 and 0.692 respectively. These diagnostics do not select the matching policy: Task 4 compares both with frozen CLIP. Generated pilot JPEGs live on disposable `/content`, so a fresh runtime reruns `make task2-pilots` while retaining the reports in Drive.
 
 [ ] **Task 3 — Implement preprocessing and the independent-transform contract**
 
@@ -111,27 +113,28 @@ Task 1 implementation is complete. The first connected Colab GPU session must st
   - [ ] Add tests proving that evaluation variants contain one transform only, resize outputs match parent dimensions, stochastic rows reproduce from seeds, and both labels receive identical sampling distributions.
   - [ ] Complete when a small fixture dataset can regenerate byte-identical deterministic variants and statistically matched stochastic policies.
 
-[ ] **Task 4 — Build the frozen-CLIP Stage A baseline**
+[ ] **Task 4 — Build the frozen-CLIP Stage A baseline** *(implementation complete; real Colab runs pending)*
 
-  - [ ] Load the vision tower only and lock the exact CLIP variant/input size before producing caches.
-  - [ ] Freeze the backbone and train a linear classifier first, followed by a small MLP only if the linear baseline is stable.
-  - [ ] Extract embeddings from the exact received training views; never run matched normalization or robustness probing inside inference.
-  - [ ] Cache fixed-view embeddings using image hash, model revision, preprocessing version, and view identifier as the key.
-  - [ ] Run a representative throughput/VRAM/cache-size pilot and choose the physical microbatch from evidence; use accumulation toward an effective batch size of 32 when practical.
-  - [ ] Train with the documented AdamW/BCE starting values and at least three seeds for the retained candidate.
-  - [ ] Save latest, best-clean, best-robustness, and best-50/50 checkpoints with their full run configuration.
+  - [x] Load the vision tower only and lock the exact CLIP variant/input size before producing caches; record the resolved model commit in cache keys.
+  - [x] Freeze the backbone and train a linear classifier first, with the MLP available only through an explicit ablation flag.
+  - [x] Extract embeddings from the exact received training views; never run matched normalization or robustness probing inside inference.
+  - [x] Cache fixed-view embeddings using image hash, resolved model revision, preprocessing version, and view identifier as the key.
+  - [x] Report throughput, peak VRAM, cache size, and accumulation toward effective batch size 32; select the physical microbatch in Colab.
+  - [ ] Train with AdamW/BCE across seeds 42, 43, and 44 for both Task 2 matching candidates, then retain one policy on `selection_val`.
+  - [x] Save latest and best-clean checkpoints now; create best-robustness and best-50/50 only when Task 3 cells exist rather than fabricating scores.
   - [ ] Complete when clean and every independent transform cell produce reproducible R.Acc., F.Acc., accuracy, confusion matrices, and logits.
 
-[ ] **Task 5 — Build the locked evaluation and reporting harness**
+[ ] **Task 5 — Build the locked evaluation and reporting harness** *(implementation complete; real robustness tables wait for Tasks 3–4)*
 
-  - [ ] Compute clean accuracy and mean accuracy across all independent transform-and-parameter cells using the agreed 50/50 formula.
-  - [ ] Report R.Acc., F.Acc., confusion matrix, ECE, false-positive rate, and false-negative rate for clean data and each transform row.
-  - [ ] Add generator/checkpoint/source breakdowns and an `unknown` metadata bucket without changing the binary public label.
-  - [ ] Add bootstrap confidence intervals for retained model comparisons and any future fast-track precision/coverage claim.
-  - [ ] Make `selection_val` the only source for checkpoint, hyperparameter, feature-retention, and calibration decisions.
-  - [ ] Prevent normal experiment commands from reading `final_test`; require an explicit final-evaluation mode after the architecture is frozen.
-  - [ ] Generate machine-readable metrics plus the robustness table needed for the report/demo.
-  - [ ] Complete when a deliberately constant or class-collapsed predictor is exposed by the per-label metrics and cannot look successful through aggregate accuracy alone.
+  - [x] Compute clean accuracy and mean accuracy across all independent transform-and-parameter cells using the agreed 50/50 formula.
+  - [x] Report R.Acc., F.Acc., confusion matrix, ECE, false-positive rate, and false-negative rate for clean data and each transform row.
+  - [x] Add generator/checkpoint/source breakdowns and an `unknown` metadata bucket without changing the binary public label.
+  - [x] Add deterministic stratified bootstrap confidence intervals for retained model comparisons and future fast-track claims.
+  - [x] Make `selection_val` the only source for ordinary checkpoint, hyperparameter, feature-retention, and calibration decisions.
+  - [x] Prevent normal experiment commands from reading `final_test`; require both explicit final-evaluation and architecture-frozen flags.
+  - [x] Generate machine-readable JSON metrics and a CSV robustness table.
+  - [x] Verify with fixtures that a constant or class-collapsed predictor is exposed by per-label metrics.
+  - [ ] Complete the integration gate when real Task 4 logits cover clean data and every independent Task 3 transform cell.
 
 [ ] **Task 6 — Add the RINE-style Stage B representation**
 

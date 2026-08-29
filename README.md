@@ -33,4 +33,8 @@ The resize benchmark is one compound downsample-and-restore operation, evaluated
 
 At inference, the detector scores the received image once and does not generate extra resized, compressed, or blurred variants. Stage 2 combines a global CLIP view with multiple detail-rich crops selected from the received view before global model-size conversion. Resize-aware training uses identical settings for both labels, while evaluation explicitly checks whether interpolation artifacts increase authentic false positives.
 
-See [PRD.md](PRD.md) for requirements, [design.md](design.md) for the pipeline, [models.md](models.md) for the model/evaluation plan, [training.md](training.md) for training and fine-tuning, and [techStack.md](techStack.md) for implementation choices.
+See [PRD.md](docs/product/PRD.md) for requirements, [design.md](docs/architecture/design.md) for the pipeline, [models.md](docs/architecture/models.md) for the model/evaluation plan, [training.md](docs/training/training.md) for training and fine-tuning, and [techStack.md](docs/architecture/techStack.md) for implementation choices.
+
+## Colab execution
+
+Run `notebooks/00_colab_setup.ipynb`, then `01_task2_data_contract.ipynb`, and finally `02_stage_a_clip.ipynb`. The Stage A notebook uses the resolved CLIP commit in every embedding-cache key, trains only the binary head, compares both Task 2 matching policies over seeds 42/43/44, and keeps `final_test` locked. Clean reports are available immediately; the locked 50/50 score and robustness checkpoints remain unavailable until Task 3 supplies the independent transform cells.

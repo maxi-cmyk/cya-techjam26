@@ -1,4 +1,4 @@
-.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots
+.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate
 
 DATA_ROOT ?= /content/hackathon_data
 ARTIFACT_ROOT ?= artifacts
@@ -42,3 +42,22 @@ task2-pilot-uniform:
 	python scripts/audit_nuisance.py --manifest $(ARTIFACT_ROOT)/task2/uniform_q95_q100_manifest.csv --output $(ARTIFACT_ROOT)/task2/uniform_q95_q100_nuisance.json --seed 42
 
 task2-pilots: task2-pilot-fixed task2-pilot-uniform
+
+TASK4_SEED ?= 42
+TASK4_BATCH_SIZE ?= 8
+PREDICTIONS ?= artifacts/task4/fixed_q96/seed_42/best_clean_predictions.csv
+EVALUATION_OUTPUT ?= artifacts/task5/fixed_q96/seed_42
+
+task4-stage-a-fixed:
+	python scripts/train_clip_baseline.py --manifest $(ARTIFACT_ROOT)/task2/fixed_q96_manifest.csv --matching-policy fixed_q96 --output-root $(ARTIFACT_ROOT)/task4 --cache-root /content/clip_embedding_cache --seed $(TASK4_SEED) --physical-batch-size $(TASK4_BATCH_SIZE)
+
+task4-stage-a-uniform:
+	python scripts/train_clip_baseline.py --manifest $(ARTIFACT_ROOT)/task2/uniform_q95_q100_manifest.csv --matching-policy uniform_q95_q100 --output-root $(ARTIFACT_ROOT)/task4 --cache-root /content/clip_embedding_cache --seed $(TASK4_SEED) --physical-batch-size $(TASK4_BATCH_SIZE)
+
+task4-stage-a-pilots: task4-stage-a-fixed task4-stage-a-uniform
+
+task4-compare:
+	python scripts/compare_stage_a.py --task4-root $(ARTIFACT_ROOT)/task4 --output $(ARTIFACT_ROOT)/task4/policy_comparison.json
+
+task5-evaluate:
+	python scripts/evaluate_predictions.py --predictions $(PREDICTIONS) --output $(EVALUATION_OUTPUT)
