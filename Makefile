@@ -1,4 +1,4 @@
-.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate
+.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare
 
 DATA_ROOT ?= /content/hackathon_data
 ARTIFACT_ROOT ?= artifacts
@@ -61,3 +61,9 @@ task4-compare:
 
 task5-evaluate:
 	python scripts/evaluate_predictions.py --predictions $(PREDICTIONS) --output $(EVALUATION_OUTPUT)
+
+task6-rine:
+	python scripts/train_rine_baseline.py --manifest $(ARTIFACT_ROOT)/task2/fixed_q96_manifest.csv --matching-policy fixed_q96 --output-root $(ARTIFACT_ROOT)/task6 --cache-root /content/rine_feature_cache --seed $(TASK4_SEED) --physical-batch-size 4
+
+task6-compare:
+	python scripts/compare_stage_a_rine.py --stage-a-root $(ARTIFACT_ROOT)/task4 --stage-b-root $(ARTIFACT_ROOT)/task6 --output $(ARTIFACT_ROOT)/task6/stage_a_vs_rine.json

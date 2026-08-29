@@ -42,6 +42,12 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             validate_config(candidate)
 
+    def test_rine_layers_must_be_unique_and_increasing(self) -> None:
+        candidate = copy.deepcopy(self.config)
+        candidate["model"]["rine_layers"] = [12, 6, 12]
+        with self.assertRaises(ConfigError):
+            validate_config(candidate)
+
 
 if __name__ == "__main__":
     unittest.main()

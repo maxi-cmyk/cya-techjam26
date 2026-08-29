@@ -93,10 +93,20 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("Training crop size must match the CLIP input size")
     if not model.get("revision"):
         raise ConfigError("A requested model revision is required")
+    rine_layers = model.get("rine_layers", [])
+    if not rine_layers or rine_layers != sorted(set(rine_layers)):
+        raise ConfigError("RINE layers must be non-empty, unique, and increasing")
+    if rine_layers[0] < 1:
+        raise ConfigError("RINE layer indices must be positive")
+    if not model.get("rine_representation_version"):
+        raise ConfigError("A RINE representation version is required")
     if not config["preprocessing"].get("version"):
         raise ConfigError("A preprocessing version is required for embedding caches")
     if config["evaluation"].get("bootstrap_iterations", 0) < 2:
         raise ConfigError("At least two bootstrap iterations are required")
+    regression = config["evaluation"].get("max_per_class_accuracy_regression")
+    if regression is None or not 0.0 <= regression < 1.0:
+        raise ConfigError("Per-class regression tolerance must be in [0, 1)")
     warmup_fraction = config["optimization"].get("warmup_fraction")
     if warmup_fraction is None or not 0.0 <= warmup_fraction < 1.0:
         raise ConfigError("Warmup fraction must be in [0, 1)")
