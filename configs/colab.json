@@ -42,6 +42,8 @@
     "identifier": "openai/clip-vit-large-patch14-336",
     "revision": "main",
     "input_size": 336,
+    "rine_layers": [6, 12, 18, 24],
+    "rine_representation_version": "rine-cls-v1",
     "freeze_backbone": true,
     "output": "p_ai_generated"
   },
@@ -77,6 +79,15 @@
     "radial_distortion": false,
     "frequency_fast_track": false
   },
+  "frequency": {
+    "extractor_version": "frequency-v1",
+    "radial_bins": 24,
+    "angular_bins": 12,
+    "dct_bins": 16,
+    "phase_bins": 12,
+    "max_analysis_size": 1024,
+    "workers": 4
+  },
   "optimization": {
     "loss": "bce_with_logits",
     "optimizer": "adamw",
@@ -95,6 +106,7 @@
     "robustness_weight": 0.5,
     "threshold": 0.5,
     "bootstrap_iterations": 1000,
+    "max_per_class_accuracy_regression": 0.01,
     "calibration": "temperature_scaling_clean_selection_val",
     "final_test_locked": true
   }

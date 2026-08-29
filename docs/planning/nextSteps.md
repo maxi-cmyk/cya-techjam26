@@ -113,18 +113,20 @@ Task 2's recorded Colab run processed 20,000 rows with 10,000 images per source 
   - [ ] Add tests proving that evaluation variants contain one transform only, resize outputs match parent dimensions, stochastic rows reproduce from seeds, and both labels receive identical sampling distributions.
   - [ ] Complete when a small fixture dataset can regenerate byte-identical deterministic variants and statistically matched stochastic policies.
 
-[ ] **Task 4 — Build the frozen-CLIP Stage A baseline** *(implementation complete; real Colab runs pending)*
+[ ] **Task 4 — Build the frozen-CLIP Stage A baseline** *(clean Stage A verified; robustness integration waits for Task 3)*
 
   - [x] Load the vision tower only and lock the exact CLIP variant/input size before producing caches; record the resolved model commit in cache keys.
   - [x] Freeze the backbone and train a linear classifier first, with the MLP available only through an explicit ablation flag.
   - [x] Extract embeddings from the exact received training views; never run matched normalization or robustness probing inside inference.
   - [x] Cache fixed-view embeddings using image hash, resolved model revision, preprocessing version, and view identifier as the key.
   - [x] Report throughput, peak VRAM, cache size, and accumulation toward effective batch size 32; select the physical microbatch in Colab.
-  - [ ] Train with AdamW/BCE across seeds 42, 43, and 44 for both Task 2 matching candidates, then retain one policy on `selection_val`.
+  - [x] Train with AdamW/BCE across seeds 42, 43, and 44 for both Task 2 matching candidates; fixed-Q96 won the clean `selection_val` comparison.
   - [x] Save latest and best-clean checkpoints now; create best-robustness and best-50/50 only when Task 3 cells exist rather than fabricating scores.
   - [ ] Complete when clean and every independent transform cell produce reproducible R.Acc., F.Acc., accuracy, confusion matrices, and logits.
 
-[ ] **Task 5 — Build the locked evaluation and reporting harness** *(implementation complete; real robustness tables wait for Tasks 3–4)*
+The verified T4 run completed all six policy/seed combinations and persisted them to Drive. Fixed-Q96 seed 42 extracted 1,390 embeddings in 38.4 seconds at 36.2 images/second, used approximately 1.43 GB peak GPU allocation, and reached 97.58% best clean accuracy. Fixed-Q96 is the provisional clean-only policy; the locked policy decision is revisited once Task 3 enables the 50/50 score.
+
+[ ] **Task 5 — Build the locked evaluation and reporting harness** *(clean reports verified; robustness tables wait for Task 3)*
 
   - [x] Compute clean accuracy and mean accuracy across all independent transform-and-parameter cells using the agreed 50/50 formula.
   - [x] Report R.Acc., F.Acc., confusion matrix, ECE, false-positive rate, and false-negative rate for clean data and each transform row.
@@ -136,24 +138,30 @@ Task 2's recorded Colab run processed 20,000 rows with 10,000 images per source 
   - [x] Verify with fixtures that a constant or class-collapsed predictor is exposed by per-label metrics.
   - [ ] Complete the integration gate when real Task 4 logits cover clean data and every independent Task 3 transform cell.
 
-[ ] **Task 6 — Add the RINE-style Stage B representation**
+Task 5 clean reports for both policies and all three seeds were generated and copied to Drive. The final-test lock remained in place. No robustness mean or 50/50 score is claimed before Task 3 produces the independent transform cells.
 
-  - [ ] Expose the selected intermediate CLIP representations without unfreezing the backbone.
-  - [ ] Train only the layer-importance estimator and binary head on the same manifest, views, seeds, and sampler as Stage A.
-  - [ ] Compare plain final-layer CLIP against RINE-style fusion on clean, transformed, and available generator/source strata.
-  - [ ] Measure added cache size, extraction time, training time, and peak memory.
-  - [ ] Retain Stage B only if it improves the predeclared selection criterion without breaching R.Acc./F.Acc. regression limits.
+[ ] **Task 6 — Add the RINE-style Stage B representation** *(clean ablation verified and provisionally retained; robustness waits for Task 3)*
+
+  - [x] Expose predeclared CLIP layers 6/12/18/24 without unfreezing the backbone and cache their CLS representations by immutable view/model keys.
+  - [x] Train only softmax layer importance and one binary head on fixed-Q96 with the same manifest, splits, seeds, and optimization contract as Stage A.
+  - [x] Implement paired Stage A versus Stage B clean comparison with the predeclared one-point per-class regression tolerance; transformed comparison waits for Task 3.
+  - [x] Record added cache size, extraction throughput, training history, layer importance, and peak GPU memory.
+  - [x] Run `03_rine_stage_b.ipynb` for seeds 42/43/44 and record the provisional clean keep/drop result.
+  - [ ] Retain Stage B only if it improves the locked 50/50 criterion without breaching R.Acc./F.Acc. regression limits after Task 3 integration.
   - [ ] Complete when Stage A versus Stage B is a reproducible, apples-to-apples ablation with a recorded keep/drop decision.
 
-[ ] **Task 7 — Implement deterministic Stage 1 frequency features**
+The verified T4 run extracted layers 6/12/18/24 for 1,390 fixed-Q96 images in 39.6 seconds at 35.1 images/second and approximately 1.77 GB peak GPU allocation. Across seeds 42/43/44, RINE reached 99.39% mean clean accuracy versus Stage A's 97.58%, with +2.63-point authentic and +1.12-point AI-generated mean accuracy changes. The provisional clean decision is `retain`; the final decision remains pending Task 3's robustness cells and the locked 50/50 score.
 
-  - [ ] Extract FFT/DCT log-magnitude summaries, radial/angular power, periodic-peak prominence, residual autocorrelation, and local neighboring-pixel dependencies.
-  - [ ] Keep generator paradigm, checkpoint, decoder/tokenizer, and upsampling metadata as evaluation strata rather than prediction targets.
-  - [ ] Fit feature scaling on `seed_train` only and cache versioned vectors with validity indicators.
-  - [ ] Train a frequency-only classifier and then a small projection fused with the retained CLIP representation.
-  - [ ] Compare magnitude and bounded phase-spectrum variants, especially on JPEG and resize rows.
-  - [ ] Audit overlap with compression/file-source nuisance features and remove generator-specific cues that fail held-out evaluation.
-  - [ ] Keep the Stage 1 early exit disabled; consider enabling synthetic-only exit only after locked precision, confidence-interval, coverage, authentic, held-out-family, and transform gates pass.
+[ ] **Task 7 — Implement deterministic Stage 1 frequency features** *(implementation complete; Colab baseline pending)*
+
+  - [x] Extract FFT/DCT log-magnitude summaries, radial/angular power, periodic-peak prominence, residual autocorrelation, and local neighboring-pixel dependencies.
+  - [x] Keep generator/checkpoint/source metadata as evaluation strata rather than prediction targets.
+  - [x] Fit feature scaling on `seed_train` only and cache versioned vectors with validity indicators and extraction errors.
+  - [x] Train magnitude/residual and magnitude/residual-plus-bounded-phase frequency-only classifiers; RINE fusion waits for clean representation selection and Task 3 integration.
+  - [x] Implement paired magnitude-versus-phase comparison; JPEG and resize rows wait for Task 3.
+  - [x] Audit the strongest correlations with file size, dimensions, and normalization quality on `seed_train`.
+  - [x] Keep the Stage 1 early exit disabled in configuration and training; any future early-exit claim still requires locked precision, confidence, coverage, authentic, held-out-family, and transform gates.
+  - [ ] Run `04_frequency_stage1.ipynb` and record the clean representation decision across seeds 42/43/44.
   - [ ] Complete when frequency-only and incremental-fusion tables support a keep/drop decision and the default inference path still falls through to Stage 2.
 
 [ ] **Task 8 — Add auxiliary feature families one at a time**

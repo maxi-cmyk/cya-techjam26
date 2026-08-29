@@ -1,218 +1,273 @@
-"""Task 7 - deterministic Stage 1 frequency feature extraction.
-
-See docs/planning/tasks7to9_gameplan.md and the frequency-path sections of
-docs/training/training.md and docs/architecture/techStack.md. This module
-is a deterministic extractor only: FFT log-magnitude summaries,
-radial/angular power, periodic-peak prominence, residual autocorrelation,
-and local pixel-dependency (NPR-style) statistics. It never independently
-returns an authenticity verdict, and the Stage 1 early exit stays disabled
-until its validation gates pass elsewhere in the pipeline.
-"""
+"""Architecture-agnostic frequency and residual fingerprint extraction."""
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
 import numpy as np
-from scipy.ndimage import gaussian_filter
-from scipy.signal import find_peaks
-
-from cya_detector.features.common import FeatureResult, to_grayscale
-
-FEATURE_NAME = "frequency"
-
-MIN_DIMENSION = 16
-MIN_STD = 1e-4
-RADIAL_BINS = 32
-ANGULAR_BINS = 36
-AUTOCORR_LAG_RADIUS = 8
-EPS = 1e-8
+from PIL import Image, ImageOps
+from scipy import fft as scipy_fft
+from scipy import ndimage
 
 
-def _radial_bin_index(height: int, width: int) -> tuple[np.ndarray, np.ndarray]:
-    cy, cx = height / 2.0, width / 2.0
-    y, x = np.ogrid[:height, :width]
-    radius = np.sqrt((y - cy) ** 2 + (x - cx) ** 2)
-    max_radius = radius.max()
-    bin_edges = np.linspace(0.0, max_radius + EPS, RADIAL_BINS + 1)
-    bin_index = np.clip(np.digitize(radius, bin_edges) - 1, 0, RADIAL_BINS - 1)
-    return bin_index, bin_edges
+@dataclass(frozen=True)
+class FrequencyFeatureResult:
+    names: tuple[str, ...]
+    values: np.ndarray
+    families: tuple[str, ...]
+    metadata: dict[str, Any]
+
+    def as_dict(self) -> dict[str, float]:
+        return dict(zip(self.names, self.values.tolist(), strict=True))
 
 
-def _radial_power_profile(power: np.ndarray) -> np.ndarray:
-    height, width = power.shape
-    bin_index, _ = _radial_bin_index(height, width)
-    profile = np.zeros(RADIAL_BINS, dtype=np.float64)
-    for bin_id in range(RADIAL_BINS):
-        mask = bin_index == bin_id
-        if mask.any():
-            profile[bin_id] = power[mask].mean()
-    return profile
+def frequency_cache_key(
+    *, image_sha256: str, extractor_version: str, configuration: dict[str, Any]
+) -> str:
+    if not image_sha256 or not extractor_version:
+        raise ValueError("Image hash and extractor version are required")
+    payload = {
+        "configuration": configuration,
+        "extractor_version": extractor_version,
+        "image_sha256": image_sha256,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
-def _radial_slope(profile: np.ndarray) -> float:
-    valid = profile[2:-2]
-    radii = np.arange(2, RADIAL_BINS - 2, dtype=np.float64)
-    if len(valid) < 4 or valid.max() <= 0:
+def _center_crop_limit(luminance: np.ndarray, max_size: int) -> np.ndarray:
+    height, width = luminance.shape
+    crop_height = min(height, max_size)
+    crop_width = min(width, max_size)
+    top = (height - crop_height) // 2
+    left = (width - crop_width) // 2
+    return luminance[top : top + crop_height, left : left + crop_width]
+
+
+def _binned_mean(
+    values: np.ndarray, coordinates: np.ndarray, *, bins: int, lower: float, upper: float
+) -> np.ndarray:
+    edges = np.linspace(lower, upper, bins + 1)
+    indices = np.clip(np.digitize(coordinates.ravel(), edges) - 1, 0, bins - 1)
+    flattened = values.ravel()
+    sums = np.bincount(indices, weights=flattened, minlength=bins)
+    counts = np.bincount(indices, minlength=bins)
+    return sums / np.maximum(counts, 1)
+
+
+def _safe_correlation(left: np.ndarray, right: np.ndarray) -> float:
+    left_flat = left.ravel().astype(np.float64)
+    right_flat = right.ravel().astype(np.float64)
+    if left_flat.size < 2 or np.std(left_flat) < 1e-12 or np.std(right_flat) < 1e-12:
         return 0.0
-    log_radius = np.log(radii + 1.0)
-    log_power = np.log(valid + EPS)
-    slope, _ = np.polyfit(log_radius, log_power, 1)
-    return float(slope)
+    return float(np.corrcoef(left_flat, right_flat)[0, 1])
 
 
-def _radial_peak_stats(profile: np.ndarray) -> tuple[float, int]:
-    # Bins 0-1 sit on/adjacent to the DC component, which can be orders of
-    # magnitude larger than any AC peak; including them would swamp the
-    # detrended max used below and hide every real periodic peak.
-    band = profile[2:]
-    if band.size == 0 or band.max() <= 0:
-        return 0.0, 0
-    baseline = np.convolve(band, np.ones(5) / 5.0, mode="same")
-    detrended = np.clip(band - baseline, a_min=0.0, a_max=None)
-    peaks, properties = find_peaks(detrended, prominence=EPS)
-    if len(peaks) == 0:
-        return 0.0, 0
-    prominences = properties["prominences"]
-    threshold = 0.1 * detrended.max()
-    significant = prominences[prominences >= threshold]
-    return float(prominences.max()), int(len(significant))
-
-
-def _angular_anisotropy(power: np.ndarray) -> float:
-    height, width = power.shape
-    cy, cx = height / 2.0, width / 2.0
-    y, x = np.ogrid[:height, :width]
-    radius = np.sqrt((y - cy) ** 2 + (x - cx) ** 2)
-    angle = np.arctan2(y - cy, x - cx)
-    max_radius = radius.max()
-    band = (radius >= 0.1 * max_radius) & (radius <= 0.9 * max_radius)
-    if not band.any():
+def _offset_correlation(image: np.ndarray, dy: int, dx: int) -> float:
+    height, width = image.shape
+    if abs(dy) >= height or abs(dx) >= width:
         return 0.0
-    angle_bins = np.linspace(-np.pi, np.pi, ANGULAR_BINS + 1)
-    bin_index = np.clip(np.digitize(angle, angle_bins) - 1, 0, ANGULAR_BINS - 1)
-    profile = np.zeros(ANGULAR_BINS, dtype=np.float64)
-    for bin_id in range(ANGULAR_BINS):
-        mask = band & (bin_index == bin_id)
-        if mask.any():
-            profile[bin_id] = power[mask].mean()
-    mean = profile.mean()
-    if mean <= EPS:
-        return 0.0
-    return float(profile.std() / mean)
+    y_left = slice(max(0, dy), min(height, height + dy))
+    y_right = slice(max(0, -dy), min(height, height - dy))
+    x_left = slice(max(0, dx), min(width, width + dx))
+    x_right = slice(max(0, -dx), min(width, width - dx))
+    return _safe_correlation(image[y_left, x_left], image[y_right, x_right])
 
 
-def _residual_autocorrelation(grayscale: np.ndarray) -> tuple[float, float]:
-    smoothed = gaussian_filter(grayscale, sigma=1.0)
-    residual = grayscale - smoothed
-
-    spectrum = np.fft.fft2(residual)
-    power = np.abs(spectrum) ** 2
-    autocorr = np.fft.ifft2(power).real
-    autocorr = np.fft.fftshift(autocorr)
-
-    height, width = autocorr.shape
-    cy, cx = height // 2, width // 2
-    center_value = autocorr[cy, cx]
-    if center_value <= EPS:
-        return 0.0, 0.0
-    autocorr /= center_value
-
-    lag = AUTOCORR_LAG_RADIUS
-    y0, y1 = max(0, cy - lag), min(height, cy + lag + 1)
-    x0, x1 = max(0, cx - lag), min(width, cx + lag + 1)
-    window = autocorr[y0:y1, x0:x1].copy()
-    local_cy, local_cx = cy - y0, cx - x0
-    window[local_cy, local_cx] = -np.inf
-
-    flat = window[np.isfinite(window)]
-    if flat.size == 0:
-        return 0.0, 0.0
-    top_k = np.sort(flat)[-5:]
-    return float(flat.max()), float(top_k.mean())
+def _difference_statistics(values: np.ndarray) -> tuple[float, float, float]:
+    flattened = values.ravel().astype(np.float64)
+    standard_deviation = float(np.std(flattened))
+    if standard_deviation < 1e-12:
+        return 0.0, 0.0, 0.0
+    centered = flattened - np.mean(flattened)
+    kurtosis = float(np.mean((centered / standard_deviation) ** 4) - 3.0)
+    return float(np.mean(np.abs(flattened))), standard_deviation, kurtosis
 
 
-def _local_pixel_dependency(grayscale: np.ndarray) -> tuple[float, float]:
-    up = np.roll(grayscale, 1, axis=0)
-    down = np.roll(grayscale, -1, axis=0)
-    left = np.roll(grayscale, 1, axis=1)
-    right = np.roll(grayscale, -1, axis=1)
-    predicted = (up + down + left + right) / 4.0
+def _append_profile(
+    names: list[str],
+    values: list[float],
+    families: list[str],
+    *,
+    prefix: str,
+    profile: np.ndarray,
+    family: str,
+) -> None:
+    centered = profile - np.mean(profile)
+    scale = np.std(centered)
+    normalized = centered / scale if scale > 1e-12 else centered
+    for index, value in enumerate(normalized):
+        names.append(f"{prefix}_{index:02d}")
+        values.append(float(value))
+        families.append(family)
 
-    center = grayscale.ravel()
-    neighbor = predicted.ravel()
-    if center.std() <= EPS or neighbor.std() <= EPS:
-        correlation = 0.0
-    else:
-        correlation = float(np.corrcoef(center, neighbor)[0, 1])
 
-    residual_energy = float(np.mean((grayscale - predicted) ** 2))
-    return correlation, residual_energy
+def extract_frequency_features(
+    image_path: Path,
+    *,
+    radial_bins: int = 24,
+    angular_bins: int = 12,
+    dct_bins: int = 16,
+    phase_bins: int = 12,
+    max_analysis_size: int = 1024,
+) -> FrequencyFeatureResult:
+    """Extract fixed-length magnitude, phase, residual, and dependency summaries."""
 
+    if min(radial_bins, angular_bins, dct_bins, phase_bins) <= 1:
+        raise ValueError("Frequency bin counts must exceed one")
+    if max_analysis_size < 32:
+        raise ValueError("max_analysis_size must be at least 32")
+    with Image.open(image_path) as image:
+        rgb = ImageOps.exif_transpose(image).convert("RGB")
+        original_width, original_height = rgb.size
+        array = np.asarray(rgb, dtype=np.float32) / 255.0
+    luminance = (
+        0.2126 * array[..., 0] + 0.7152 * array[..., 1] + 0.0722 * array[..., 2]
+    )
+    luminance = _center_crop_limit(luminance, max_analysis_size)
+    height, width = luminance.shape
+    if min(height, width) < 16:
+        raise ValueError(f"Image is too small for frequency extraction: {width}x{height}")
 
-def extract_frequency_features(image: np.ndarray) -> FeatureResult:
-    """Extract deterministic frequency-domain features from an RGB image.
-
-    `image` is an RGB float32 array in [0, 1], as returned by
-    `cya_detector.features.common.load_image_array`.
-    """
-
-    height, width = image.shape[0], image.shape[1]
-    grayscale = to_grayscale(np.asarray(image, dtype=np.float64))
-
-    valid = height >= MIN_DIMENSION and width >= MIN_DIMENSION and grayscale.std() > MIN_STD
-    if not valid:
-        return FeatureResult(
-            name=FEATURE_NAME,
-            values={
-                "log_magnitude_mean": 0.0,
-                "log_magnitude_std": 0.0,
-                "high_freq_energy_ratio": 0.0,
-                "radial_slope": 0.0,
-                "radial_peak_prominence_max": 0.0,
-                "radial_peak_count": 0.0,
-                "angular_anisotropy_std": 0.0,
-                "residual_autocorr_peak_max": 0.0,
-                "residual_autocorr_peak_mean": 0.0,
-                "npr_correlation_mean": 0.0,
-                "npr_residual_energy": 0.0,
-            },
-            valid=False,
-            confidence=0.0,
-            notes="Image too small or near-constant for frequency analysis",
-        )
-
-    spectrum = np.fft.fftshift(np.fft.fft2(grayscale))
+    window = np.outer(np.hanning(height), np.hanning(width)).astype(np.float32)
+    centered = luminance - float(np.mean(luminance))
+    spectrum = np.fft.rfft2(centered * window)
     magnitude = np.abs(spectrum)
     power = magnitude**2
     log_magnitude = np.log1p(magnitude)
+    fy = np.fft.fftfreq(height)[:, None]
+    fx = np.fft.rfftfreq(width)[None, :]
+    radius = np.sqrt(fy**2 + fx**2) / math.sqrt(0.5)
+    angle = np.arctan2(fy, np.broadcast_to(fx, radius.shape))
 
-    radial_profile = _radial_power_profile(power)
-    total_energy = radial_profile.sum()
-    high_freq_energy = radial_profile[RADIAL_BINS // 2 :].sum()
-    high_freq_ratio = float(high_freq_energy / total_energy) if total_energy > EPS else 0.0
+    names: list[str] = []
+    values: list[float] = []
+    families: list[str] = []
+    radial_profile = _binned_mean(
+        log_magnitude, radius, bins=radial_bins, lower=0.0, upper=1.0
+    )
+    angular_profile = _binned_mean(
+        log_magnitude, angle, bins=angular_bins, lower=-math.pi / 2, upper=math.pi / 2
+    )
+    _append_profile(
+        names, values, families, prefix="fft_radial", profile=radial_profile, family="magnitude"
+    )
+    _append_profile(
+        names,
+        values,
+        families,
+        prefix="fft_angular",
+        profile=angular_profile,
+        family="magnitude",
+    )
 
-    radial_slope = _radial_slope(radial_profile)
-    peak_prominence, peak_count = _radial_peak_stats(radial_profile)
-    angular_anisotropy = _angular_anisotropy(power)
-    autocorr_peak_max, autocorr_peak_mean = _residual_autocorrelation(grayscale)
-    npr_correlation, npr_residual_energy = _local_pixel_dependency(grayscale)
+    total_power = float(np.sum(power)) + 1e-12
+    for feature_name, mask in (
+        ("fft_power_low", radius < 0.15),
+        ("fft_power_mid", (radius >= 0.15) & (radius < 0.45)),
+        ("fft_power_high", radius >= 0.45),
+    ):
+        names.append(feature_name)
+        values.append(float(np.sum(power[mask]) / total_power))
+        families.append("magnitude")
+    slope = float(np.polyfit(np.linspace(0.0, 1.0, radial_bins)[1:], radial_profile[1:], 1)[0])
+    interior = log_magnitude[radius > 0.05]
+    peak_prominence = (
+        float((np.max(interior) - np.median(interior)) / (np.std(interior) + 1e-12))
+        if interior.size
+        else 0.0
+    )
+    names.extend(("fft_radial_slope", "fft_periodic_peak_prominence"))
+    values.extend((slope, peak_prominence))
+    families.extend(("magnitude", "magnitude"))
 
-    confidence = float(np.clip(min(height, width) / 128.0, 0.0, 1.0))
+    dct = np.abs(scipy_fft.dctn(centered * window, type=2, norm="ortho"))
+    log_dct = np.log1p(dct)
+    dct_y = np.arange(height)[:, None] / max(height - 1, 1)
+    dct_x = np.arange(width)[None, :] / max(width - 1, 1)
+    dct_radius = np.sqrt(dct_y**2 + dct_x**2) / math.sqrt(2.0)
+    dct_profile = _binned_mean(
+        log_dct, dct_radius, bins=dct_bins, lower=0.0, upper=1.0
+    )
+    _append_profile(
+        names, values, families, prefix="dct_radial", profile=dct_profile, family="magnitude"
+    )
+    dct_energy = dct**2
+    names.append("dct_high_energy_ratio")
+    values.append(float(np.sum(dct_energy[dct_radius >= 0.5]) / (np.sum(dct_energy) + 1e-12)))
+    families.append("magnitude")
 
-    return FeatureResult(
-        name=FEATURE_NAME,
-        values={
-            "log_magnitude_mean": float(log_magnitude.mean()),
-            "log_magnitude_std": float(log_magnitude.std()),
-            "high_freq_energy_ratio": high_freq_ratio,
-            "radial_slope": radial_slope,
-            "radial_peak_prominence_max": peak_prominence,
-            "radial_peak_count": float(peak_count),
-            "angular_anisotropy_std": angular_anisotropy,
-            "residual_autocorr_peak_max": autocorr_peak_max,
-            "residual_autocorr_peak_mean": autocorr_peak_mean,
-            "npr_correlation_mean": npr_correlation,
-            "npr_residual_energy": npr_residual_energy,
+    residual = centered - ndimage.gaussian_filter(centered, sigma=1.0, mode="reflect")
+    for lag in (1, 2, 4):
+        for direction, dy, dx in (
+            ("h", 0, lag),
+            ("v", lag, 0),
+            ("d1", lag, lag),
+            ("d2", lag, -lag),
+        ):
+            names.append(f"residual_corr_{direction}_{lag}")
+            values.append(_offset_correlation(residual, dy, dx))
+            families.append("residual")
+    for direction, differences in (
+        ("h", np.diff(luminance, axis=1)),
+        ("v", np.diff(luminance, axis=0)),
+    ):
+        mean_absolute, standard_deviation, kurtosis = _difference_statistics(differences)
+        for statistic, value in (
+            ("mean_abs", mean_absolute),
+            ("std", standard_deviation),
+            ("kurtosis", kurtosis),
+        ):
+            names.append(f"neighbor_diff_{direction}_{statistic}")
+            values.append(value)
+            families.append("residual")
+    names.extend(("pixel_corr_h", "pixel_corr_v", "residual_std"))
+    values.extend(
+        (
+            _offset_correlation(luminance, 0, 1),
+            _offset_correlation(luminance, 1, 0),
+            float(np.std(residual)),
+        )
+    )
+    families.extend(("residual", "residual", "residual"))
+
+    phase = np.angle(spectrum)
+    unit_phase = np.exp(1j * phase)
+    phase_coherence = _binned_mean(
+        np.real(unit_phase), radius, bins=phase_bins, lower=0.0, upper=1.0
+    ) + 1j * _binned_mean(
+        np.imag(unit_phase), radius, bins=phase_bins, lower=0.0, upper=1.0
+    )
+    for index, value in enumerate(np.clip(np.abs(phase_coherence), 0.0, 1.0)):
+        names.append(f"phase_radial_coherence_{index:02d}")
+        values.append(float(value))
+        families.append("phase")
+    histogram, _ = np.histogram(phase, bins=32, range=(-math.pi, math.pi), density=False)
+    probabilities = histogram / max(np.sum(histogram), 1)
+    nonzero = probabilities[probabilities > 0]
+    phase_entropy = float(-np.sum(nonzero * np.log(nonzero)) / math.log(32))
+    names.append("phase_entropy")
+    values.append(phase_entropy)
+    families.append("phase")
+
+    vector = np.asarray(values, dtype=np.float64)
+    if not np.all(np.isfinite(vector)):
+        raise ValueError(f"Non-finite frequency feature generated for {image_path}")
+    return FrequencyFeatureResult(
+        names=tuple(names),
+        values=vector,
+        families=tuple(families),
+        metadata={
+            "original_width": original_width,
+            "original_height": original_height,
+            "analysis_width": width,
+            "analysis_height": height,
+            "center_crop_only": True,
+            "resize_applied": False,
         },
-        valid=True,
-        confidence=confidence,
     )
