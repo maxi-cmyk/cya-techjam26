@@ -15,6 +15,7 @@ venv/
 .idea/
 .ipynb_checkpoints/
 /notebooks/00_colab_setup.local.ipynb
+.worktrees/
 
 # Secrets and local configuration
 .env
