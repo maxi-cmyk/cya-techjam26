@@ -196,7 +196,7 @@ def validate_prnu_device_signal_v2(
     manifest_path: Path,
     artifact_root: Path,
     reference_images_per_device: int = 25,
-    crop_size: int = 512,
+    crop_size: int = 256,
     wavelet: str = "db2",
     wavelet_levels: int = 4,
     edge_keep_quantile: float = 0.75,
@@ -258,7 +258,7 @@ def validate_prnu_device_signal_v2(
     if len(reference_rows) < 2:
         raise ValueError("PRNU v2 requires at least two devices with reference and query images")
 
-    fingerprint_root = artifact_root / "fingerprints"
+    fingerprint_root = artifact_root / "fingerprints" / f"crop_{crop_size}"
     fingerprint_root.mkdir(parents=True, exist_ok=True)
     references: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     device_details: list[dict[str, Any]] = []
@@ -381,5 +381,7 @@ def validate_prnu_device_signal_v2(
             else "Independent device-signal gate failed; do not expose PRNU v2 to binary fusion."
         ),
     }
-    write_json(artifact_root / "audits" / "prnu_v2_signal_validation.json", report)
+    audit_root = artifact_root / "audits"
+    write_json(audit_root / "prnu_v2_signal_validation.json", report)
+    write_json(audit_root / f"prnu_v2_signal_validation_{crop_size}.json", report)
     return report

@@ -87,6 +87,11 @@ class ConfigTests(unittest.TestCase):
             validate_config(candidate)
 
     def test_prnu_v2_runtime_contract_is_fail_closed(self) -> None:
+        self.assertEqual(self.config["prnu_v2_runtime"]["crop_size"], 256)
+        self.assertEqual(
+            self.config["prnu_v2_runtime"]["extractor_version"],
+            "prnu-v2-runtime-v2-crop256",
+        )
         candidate = copy.deepcopy(self.config)
         candidate["prnu_v2_runtime"]["crop_size"] = 500
         with self.assertRaises(ConfigError):

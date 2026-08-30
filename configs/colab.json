@@ -162,8 +162,8 @@
     "workers": 4
   },
   "prnu_v2_runtime": {
-    "extractor_version": "prnu-v2-runtime-v1",
-    "crop_size": 512,
+    "extractor_version": "prnu-v2-runtime-v2-crop256",
+    "crop_size": 256,
     "wavelet": "db2",
     "wavelet_levels": 4,
     "edge_keep_quantile": 0.75,

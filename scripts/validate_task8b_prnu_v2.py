@@ -25,7 +25,7 @@ def main() -> int:
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=Path("configs/colab.json"))
     parser.add_argument("--reference-images-per-device", type=int, default=25)
-    parser.add_argument("--crop-size", type=int, default=512)
+    parser.add_argument("--crop-size", type=int, default=256)
     parser.add_argument("--wavelet", default="db2")
     parser.add_argument("--wavelet-levels", type=int, default=4)
     parser.add_argument("--edge-keep-quantile", type=float, default=0.75)

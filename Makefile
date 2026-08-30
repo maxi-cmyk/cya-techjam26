@@ -43,6 +43,7 @@ RINE_CHECKPOINT ?=
 CONTROLLED_RINE_CHECKPOINT ?= $(ROBUSTNESS_ROOT)/train-controlled-rine/seed_$(ROBUSTNESS_SEED)/best_50_50.pt
 ROBUSTNESS_FUSION_VARIANT ?= frequency
 PRNU_V2_RUNTIME_TABLE ?= $(ROBUSTNESS_ROOT)/features/prnu_v2_runtime_features.csv
+PRNU_V2_CROP_SIZE ?= 256
 
 robustness-test:
 	PYTHONPATH=src python -m unittest tests.test_robustness_training tests.test_prnu_runtime_v2 tests.test_evaluation tests.test_controlled_sampler -v
@@ -181,7 +182,7 @@ task8b-prnu-validate:
 	python scripts/validate_task8b_prnu.py --manifest $(TASK8B_MANIFEST) --output $(TASK8B_ARTIFACT_ROOT)/audits/prnu_signal_validation.json
 
 task8b-v2-prnu-validate:
-	python scripts/validate_task8b_prnu_v2.py --manifest $(TASK8B_MANIFEST) --artifact-root $(TASK8B_V2_ARTIFACT_ROOT) --reference-images-per-device 25 --crop-size 512 --wavelet db2 --wavelet-levels 4 --edge-keep-quantile 0.75 --maximum-shift 8 --minimum-auc 0.60
+	python scripts/validate_task8b_prnu_v2.py --manifest $(TASK8B_MANIFEST) --artifact-root $(TASK8B_V2_ARTIFACT_ROOT) --reference-images-per-device 25 --crop-size $(PRNU_V2_CROP_SIZE) --wavelet db2 --wavelet-levels 4 --edge-keep-quantile 0.75 --maximum-shift 8 --minimum-auc 0.60
 
 task8b-decision:
 	python scripts/decide_task8b.py --matched-readiness $(TASK8B_ARTIFACT_ROOT)/audits/matched_readiness_report.json --prnu-validation $(TASK8B_ARTIFACT_ROOT)/audits/prnu_signal_validation.json --output $(TASK8B_ARTIFACT_ROOT)/reports/retention_decision.json

@@ -102,7 +102,13 @@ def audit_prnu_runtime_rows(
     minimum_eligibility_rate: float,
     maximum_label_gap: float,
 ) -> dict[str, Any]:
-    """Audit received-image crop support without consulting labels to set eligibility."""
+    """Gate on clean inputs and report coverage for every robustness view.
+
+    Eligibility is always determined from the received encoded dimensions. The
+    binary data-readiness decision uses matched-clean rows only: deliberately
+    downscaled robustness views are evaluation conditions and may legitimately
+    carry a zero-valued PRNU vector with validity/confidence masks.
+    """
 
     if not 0.0 <= minimum_eligibility_rate <= 1.0:
         raise ValueError("Minimum PRNU-v2 eligibility rate must be in [0, 1]")
@@ -112,6 +118,7 @@ def audit_prnu_runtime_rows(
         raise ValueError("PRNU-v2 runtime audit refuses final_test rows")
 
     counts: Counter[tuple[str, str, str]] = Counter()
+    clean_counts: Counter[tuple[str, str, str]] = Counter()
     failures: list[dict[str, str]] = []
     eligibility: dict[str, bool] = {}
     for row in rows:
@@ -126,14 +133,17 @@ def audit_prnu_runtime_rows(
         eligibility[sample_id] = eligible
         group = (row.get("split", ""), row.get("label", ""), "eligible" if eligible else "ineligible")
         counts[group] += 1
+        if row.get("image_view") == "matched_clean" and row.get("transform") == "clean":
+            clean_counts[group] += 1
 
     groups: list[dict[str, Any]] = []
+    coverage_groups: list[dict[str, Any]] = []
     ready = not failures
     for split in ("seed_train", "selection_val"):
         rates: dict[str, float] = {}
         for label in ("authentic", "ai_generated"):
-            eligible_count = counts[(split, label, "eligible")]
-            row_count = eligible_count + counts[(split, label, "ineligible")]
+            eligible_count = clean_counts[(split, label, "eligible")]
+            row_count = eligible_count + clean_counts[(split, label, "ineligible")]
             rate = eligible_count / row_count if row_count else 0.0
             rates[label] = rate
             groups.append(
@@ -145,6 +155,19 @@ def audit_prnu_runtime_rows(
                     "eligibility_rate": rate,
                 }
             )
+            all_eligible_count = counts[(split, label, "eligible")]
+            all_row_count = all_eligible_count + counts[(split, label, "ineligible")]
+            coverage_groups.append(
+                {
+                    "split": split,
+                    "label": label,
+                    "row_count": all_row_count,
+                    "eligible_count": all_eligible_count,
+                    "eligibility_rate": (
+                        all_eligible_count / all_row_count if all_row_count else 0.0
+                    ),
+                }
+            )
             ready &= row_count > 0 and rate >= minimum_eligibility_rate
         ready &= abs(rates["authentic"] - rates["ai_generated"]) <= maximum_label_gap
 
@@ -153,9 +176,11 @@ def audit_prnu_runtime_rows(
         "resize_applied": False,
         "exif_transpose_applied": False,
         "eligibility_rule": "received_encoded_image_min_dimension_gte_crop_size",
+        "readiness_scope": "matched_clean_rows_only",
         "minimum_eligibility_rate": minimum_eligibility_rate,
         "maximum_label_gap": maximum_label_gap,
         "groups": groups,
+        "all_view_coverage_groups": coverage_groups,
         "read_failures": failures,
         "ready_for_binary_ablation": bool(ready),
         "final_test_read": False,

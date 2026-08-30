@@ -61,11 +61,11 @@ Every notebook remains a thin launcher for versioned modules in `src/`. A runtim
 | 7. Frequency Stage 1 | Complete; fusion rejected | RINE+frequency mean 52.15% versus 99.81% parent; early exit remains disabled | No further run before Task 9 |
 | 8. Color/physical auxiliaries | Complete; Lab fusion rejected | RINE+Lab mean 98.95% versus 99.81% parent and AI accuracy regressed 1.82 points; combined candidate skipped | No matched-data auxiliary retained |
 | 8B. Native physical pilot | Complete; no physical feature retained | Matched nuisance B.Acc. 0.50 passed, but multi-image PRNU AUC 0.538 and single-image proxy AUC 0.543 both missed the 0.60 gate; CA coverage was zero | No binary physical fusion run; reopen only with materially better native device/lens evidence |
-| 8B-v2. Improved PRNU estimator | Binary workflow implemented; Colab run pending | Device AUC 0.917 validated the residual estimator; Notebook 08 now tests a separate reference-free runtime vector | Run the 512px readiness gate, PRNU-only diagnostic, and RINE+PRNU retention comparison |
+| 8B-v2. Improved PRNU estimator | 256 px compatibility rerun ready; cloud result pending | The 512 px known-device run passed (AUC 0.917), but the binary handoff exposed a crop-protocol mismatch; code now requires a separate label-free 256 px pass before binary fitting | Run the 256 px PREMIER gate first, then the matched-clean readiness audit and locked binary ablation only if it passes |
 | 9. Texture path | In progress with teammate | Deterministic top-k non-overlapping Laplacian/Sobel selection passes fixtures | Complete global+patch encoding and compare against controlled RINE |
-| 10. Packaging | Not started | Final-test remains sealed | Wait for Task 9 and PRNU-v2 retention decisions |
+| 10. Packaging | Not started | Final-test remains sealed; corrected PRNU-v2 result is pending | Wait for Task 9 and the bounded PRNU-v2 rerun |
 
-Notebook 07 completed the post-Task-3 robustness rerun defined in [`docs/training/robustness_evaluation_scope.md`](../training/robustness_evaluation_scope.md). The frozen parent is controlled RINE without frequency or Lab fusion. Task 9 is currently being completed by another teammate, while [`notebooks/08_prnu_v2_binary.ipynb`](../../notebooks/08_prnu_v2_binary.ipynb) owns the revised PRNU binary gate. Task 10 remains blocked until both decisions are recorded. No calibration or final-test run is valid before then.
+Notebook 07 completed the post-Task-3 robustness rerun defined in [`docs/training/robustness_evaluation_scope.md`](../training/robustness_evaluation_scope.md). The frozen parent is controlled RINE without frequency or Lab fusion. Notebook 08 found that its initial 512 px binary protocol was incompatible with the Task 2 handoff before fitting. The corrected workflow now fails early unless the estimator independently passes at 256 px, gates readiness on matched-clean rows only, and keeps downscaled robustness rows through explicit masks. Task 9 is currently being completed by another teammate. No calibration or final-test run is valid before the remaining decisions are recorded.
 
 Verification used the persisted Notebook 07 outputs. Execution reached count 65 and synced 19,588 new or changed files to the Drive robustness artifact directory. One intermediate byte-hash assertion failed when a locally regenerated fixed-Q96 manifest was compared with the Drive copy; the subsequent audit showed identical 2,000-row `sample_id` sets and zero differences outside environment-specific path columns. The actual robustness pipeline then used the frozen Drive manifest, whose recorded SHA-256 is `aee4bd2e16fec2208cea4a7834a2c6b6086c5edfb9c5c64df21f54cc89ff3ef2`.
 
@@ -89,7 +89,7 @@ Notebook 07 results below are development `selection_val` results. The locked 50
 | Native multi-image PRNU reference | **AUC 0.538** | 10 training devices, 100 disjoint reference images, 316 device-identity queries, 3,160 comparisons; same-device mean correlation 0.00266 versus 0.00166 across devices; below the predeclared 0.60 AUC gate | Reject for this pilot; do not train a binary projection/fusion head and do not claim camera authentication |
 | Single-image PRNU coherence proxy | **AUC 0.543** | Device-separation validation used no authentic/AI labels; top-1 device accuracy 0.155 versus 0.10 random; still below the same 0.60 gate | Reject for this pilot; revisit only with a materially improved estimator and new held-out-device evidence |
 | Native multi-image PRNU v2 | **AUC 0.917** | 10 devices, 250 disjoint reference images, 166 queries, and 1,660 PCE comparisons; top-1 0.855 versus 0.10 random; same-device mean PCE 262.65 versus 11.31 different-device | Freeze as evidence that the extraction method recovers known-device signal; do not use reference-bank PCE as a generic authenticity score or retain PRNU until a reference-free locked binary ablation passes |
-| Reference-free PRNU v2 runtime | Run pending | Single-image residual energy, spectral, periodicity, CFA, luminance-coupling, block-consistency, eligibility, validity, and confidence values; no fingerprint/PCE/device input | Run Notebook 08 and retain only on strict locked-score and per-class gates |
+| Reference-free PRNU v2 runtime | **256 px rerun pending** | The initial 512 px audit found 0/20,850 eligible views with no read failures or resize; this diagnoses a protocol mismatch. Readiness now gates only matched-clean rows, while smaller transform cells remain masked evaluation cases | First require a new label-free 256 px device-signal pass; then run PRNU-only and RINE+PRNU without redoing controlled-RINE parents |
 | Chromatic aberration | Gate not eligible | Task 8B lens/focal metadata fraction 0.0 and edge-rich fraction 0.0; corrected/uncorrected calibration coverage is absent | Keep deferred; collect calibrated native lens/focal and edge-rich coverage before estimator validation or binary fitting |
 | Radial distortion | Not run | Insufficient eligible line/arc support | Keep deferred |
 
@@ -99,7 +99,7 @@ High extractor confidence means the statistic was numerically measurable; it doe
 
 Notebook 07 completed the controlled RINE and incremental fusion matrix across seeds 42/43/44. Controlled RINE improved the locked mean from 96.20% for the existing clean-trained RINE to 99.81%. Frequency and Lab both failed the strict improvement gate, so neither was retained and the combined candidate was correctly skipped. Task 9 should compare its global-plus-patch candidate directly against this controlled-RINE parent under the same locked evaluation and resource budget.
 
-Do not spend another training run on phase, frequency fusion, Lab fusion, the current RGB-only vector, RGB+Lab fixed concatenation, chromatic aberration, radial distortion, or full-backbone CLIP fine-tuning **on the current matched-Q96 handoff**. Their standalone tables remain diagnostic evidence, but their inference flags stay disabled. Task 8B v1 remains closed. The revised PRNU-v2 binary ablation is now a required pre-Task-10 decision: it may be retained only through its reference-free runtime vector, never through known-device PCE.
+Do not spend another training run on phase, frequency fusion, Lab fusion, the current RGB-only vector, RGB+Lab fixed concatenation, chromatic aberration, radial distortion, or full-backbone CLIP fine-tuning **on the current matched-Q96 handoff**. Their standalone tables remain diagnostic evidence, but their inference flags stay disabled. Task 8B v1 remains closed. PRNU-v2 may proceed only after the new label-free 256 px gate passes; known-device PCE remains diagnostic only and never becomes a binary feature.
 
 ### Task 8B v1 decision and v2 follow-up
 
@@ -143,7 +143,7 @@ report hashes the readiness and PRNU inputs used to authorize the fail-closed
 decision.
 
 The bounded PRNU v2 follow-up is isolated under `artifacts/task8b_v2`. Its
-implementation changes the estimator, not the evidence threshold: 25 disjoint
+original known-device validation changed the estimator, not the evidence threshold: 25 disjoint
 references per eligible device, a native-coordinate 512 px crop without resize
 or EXIF transposition, wavelet plus spectral cleanup, multiplicative reference
 estimation, masked pixels, and PCE with an eight-pixel registration window. The
@@ -151,8 +151,9 @@ assumption is that encoded pixel coordinates remain stable within a PREMIER
 device ID. The verified run reads only `seed_train` PREMIER device identities
 and passes the unchanged gates: AUC 0.9171, top-1 accuracy 0.8554 versus 0.10
 random, and mean same-device PCE 262.65 versus 11.31 across devices. This
-validates repeatable device signal only; no binary fusion is authorized until a
-separately locked usefulness ablation passes.
+validates repeatable device signal at 512 px only; no binary fusion is authorized
+until the same estimator separately passes the label-free 256 px compatibility
+gate and a locked usefulness ablation.
 
 This is a known-device reference experiment: every query is compared with a
 fingerprint built from other images of that same device class. It does not test
@@ -166,12 +167,12 @@ derived from the frozen v2 residual pipeline. Candidate summaries may include
 masked residual energy, spectral flatness, row/column periodicity,
 luminance-residual coupling, and block consistency, but they must not include a
 device ID, source metadata, or comparison with a known-device fingerprint.
-Before fitting it, audit both labels for native crop support at 512 px without
-resize. If support is insufficient or class-imbalanced, acquire additional
-licensed 512 px-or-larger synthetic exports or stop; do not resize low-resolution
-generators merely to satisfy eligibility. Build label-independent native crops,
-rerun the nuisance-only audit, and require balanced eligibility before reading
-authentic/AI labels. Fit any runtime projection on `seed_train`, select it only
+Before fitting it, rerun the device-signal test at a predeclared 256 px native
+crop without resize, then audit balanced matched-clean support at that same
+size. Do not resize low-resolution images merely to satisfy eligibility.
+Deliberately downscaled robustness cells remain evaluation rows with zero PRNU
+values and explicit eligibility, validity, and confidence masks. Fit any runtime
+projection on `seed_train`, select it only
 on `selection_val`, and use the complete-device/complete-generator
 `heldout_test` once for confirmation; the competition `final_test` remains
 sealed.
@@ -197,21 +198,21 @@ Tasks are ordered by integration dependency, but implementation does not have to
 | Task 5 evaluation harness | Complete and robustness-verified | None | Task 9 and Task 10 | `src/cya_detector/evaluation/`, reporting tests |
 | Task 7 frequency extraction | Complete; fusion rejected | None | Optional diagnostics only | `src/cya_detector/features/frequency.py` |
 | Task 8 color features | Complete; Lab fusion rejected | None | Optional diagnostics only | `src/cya_detector/features/color.py` |
-| Task 8 PRNU features | Reference-free v2 workflow implemented; run pending | 512 px balanced-coverage gate, then PRNU-only and RINE+PRNU locked evaluation | Task 9 texture work | `src/cya_detector/features/prnu_runtime_v2.py`, `notebooks/08_prnu_v2_binary.ipynb` |
+| Task 8 PRNU features | 256 px rerun implemented; result pending | Separate label-free PREMIER validation must pass before matched-clean readiness and binary fitting | Task 9 texture work | `src/cya_detector/features/prnu_runtime_v2.py`, `notebooks/08_prnu_v2_binary.ipynb` |
 | Task 8 optical features | Deferred after Task 8B | Reopen only after lens/focal metadata and calibrated edge-rich corrected/uncorrected coverage pass readiness | Frequency, color, PRNU, and texture tracks | `src/cya_detector/features/optics.py` |
 | Task 9 texture path | In progress with teammate | Controlled RINE parent and locked evaluation are ready | Task 10 skeleton work | Teammate-owned Task 9 paths |
 | Task 6 RINE integration | Complete and retained | None | Task 9 comparison | `src/cya_detector/models/rine.py` |
-| Task 10 packaging | After Task 9 and PRNU-v2 retention | Selected outputs from controlled RINE, Task 9, and reference-free PRNU-v2 | Documentation/demo preparation only | inference CLI, calibration, release tests |
+| Task 10 packaging | After Task 9 and the bounded PRNU-v2 rerun | Selected outputs from controlled RINE, Task 9, and PRNU-v2 only if its strict gate passes | Documentation/demo preparation only | inference CLI, calibration, release tests |
 
-The parent model decision is frozen: controlled RINE is retained, while frequency and Lab fusion are rejected. Task 9 global-plus-patch implementation and the reference-free PRNU-v2 binary run are the two active gates. A Task 10 inference-CLI skeleton may be developed without selecting weights or reading `final_test`, but calibration, architecture freeze, and final evaluation remain blocked on both decisions.
+The parent model decision is frozen: controlled RINE is retained, while frequency and Lab fusion are rejected. The reference-free PRNU-v2 binary path is reopened only under the separately validated 256 px protocol; the earlier 512 px audit does not authorize or reject that run. Task 9 global-plus-patch implementation continues independently. A Task 10 inference-CLI skeleton may be developed without selecting weights or reading `final_test`, but calibration, architecture freeze, and final evaluation remain blocked on Task 9 and the bounded PRNU-v2 decision.
 
 ## How to proceed from here
 
 1. **Tasks 3-8 robustness decision complete.** Notebook 07 materialized every independent transform cell, populated the locked evaluation, retained controlled RINE at a 99.81% mean locked score, rejected frequency and Lab fusion, and kept `final_test` sealed.
 2. **Complete teammate-owned Task 9.** Preserve the global CLIP view, encode a fixed patch budget, train only the aggregator/fusion head, and compare global-only, local-only, and combined accuracy plus latency against the frozen controlled-RINE parent, including resize 0.5x/0.25x.
-3. **Run Notebook 08 for PRNU-v2.** Require at least 95% 512px received-image support in each split/label group and at most a five-point label gap; never upsample. Train the PRNU-only diagnostic and RINE+PRNU across seeds 42/43/44 and all 14 cells. Retain only on a strict locked-score improvement with at most one-point class regression.
-4. **Resolve the combined candidate.** If texture and PRNU both individually pass, compare RINE+texture+PRNU under the same score, class, coverage, redundancy, and latency gates. If either fails, do not include it merely for architectural variety.
-5. **Freeze and package after both gates.** Select the architecture by the locked 50/50 score and per-class regression limits, fit temperature once on clean `selection_val`, implement the directory JSON contract, and then run sealed `final_test` once.
+3. **Run the corrected PRNU-v2 sequence.** First run the label-free PREMIER device test at the predeclared 256 px crop. Only if it passes, audit matched-clean Task 2 coverage, extract all clean/transform rows with validity masks, and run PRNU-only plus RINE+PRNU across seeds 42/43/44. Do not redo controlled-RINE parents.
+4. **Resolve any combined candidate conservatively.** Compare texture+PRNU only if each independently passes its strict locked score, class-regression, coverage, redundancy, and latency gates.
+5. **Freeze and package after Task 9 and PRNU-v2.** Select the architecture by the locked 50/50 score and per-class regression limits, fit temperature once on clean `selection_val`, implement the directory JSON contract, and then run sealed `final_test` once.
 
 ## Action items
 
@@ -347,11 +348,13 @@ The verified CPU run extracted 67 features for 1,390 rows and completed all nine
   - [x] Run PRNU v2 on the licensed PREMIER source package: AUC 0.9171, top-1 0.8554 versus 0.10 random, and same/different mean PCE 262.65/11.31; binary labels and fusion remain unused.
   - [x] Interpret the result as known-device repeatability only; prohibit maximum reference-bank PCE from acting as a generic authenticity feature.
   - [x] Define and version a reference-free `prnu_v2_runtime` single-image vector derived from the frozen residual pipeline, with no device ID, metadata, known-reference comparison, or PCE input.
-  - [ ] Audit authentic and AI-generated rows for balanced native 512 px crop support; acquire additional licensed high-resolution generator exports or stop if the gate fails, and never upsample rows into eligibility.
-  - [x] Implement label-independent received-image 512 px crop eligibility, validity/confidence masks, no resize, no EXIF transposition, and a fail-closed balanced-coverage report before fitting.
-  - [ ] Fit on `seed_train`, select on `selection_val`, and confirm once on grouped `heldout_test`; never read the competition `final_test` for this decision.
+  - [x] Preserve the initial 512 px incompatibility audit: all 20,850 clean/transform rows were ineligible, with no read failures or resizing; do not present this as a 256 px PRNU result.
+  - [x] Implement label-independent matched-clean 256 px eligibility, validity/confidence masks, no resize, no EXIF transposition, and separate all-view coverage reporting before fitting.
+  - [x] Skip fitting, selection, and held-out confirmation for the initial 512 px attempt because its prerequisite data gate failed; the competition `final_test` remains unread.
   - [x] Add `08_prnu_v2_binary.ipynb`, CLI/Make entrypoints, a PRNU-only controlled diagnostic, RINE+PRNU fusion, three-seed comparison, and Drive synchronization without reading `final_test`.
-  - [ ] Run PRNU-only, RINE-only, and RINE+PRNU across seeds 42/43/44 and every independent transform after the runtime-vector data gate passes; retain only on a strict locked-50/50 improvement with at most one-point regression for either class.
+  - [x] Preserve the controlled-RINE parents independently so the corrected PRNU run does not repeat that training.
+  - [ ] Run and record the separately versioned label-free v2 device test at 256 px; proceed to binary fitting only if the unchanged AUC, same/different PCE, and top-1 gates pass.
+  - [ ] Run PRNU-only and RINE+PRNU across seeds 42/43/44 with smaller robustness views represented by validity/confidence masks; retain only on strict locked-score and per-class gates.
   - [x] Retain no Task 8B physical feature and make no camera or lens authenticity claim.
 
 [ ] **Task 9 — Add the texture-aware local-detail path under a fixed budget** *(in progress with another teammate)*

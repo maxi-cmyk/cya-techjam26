@@ -271,29 +271,41 @@ conditions pass. No authentic/AI labels, selection/held-out rows, or binary
 fusion training were used. The next permissible step is a separately locked
 binary usefulness ablation, not automatic feature retention.
 
+The first binary handoff audit subsequently showed that none of its received
+images supported that 512 px crop. That result is retained as a protocol-mismatch
+audit, not as a PRNU rejection. Before any binary labels are used, the improved
+estimator must therefore pass a new label-free PREMIER validation at a fixed
+256 px native crop. The 512 px report and fingerprints are archived separately;
+their metrics cannot authorize the 256 px binary run.
+
 That binary workflow is implemented separately in
 `notebooks/08_prnu_v2_binary.ipynb`. It does not expose enrolled-device
 fingerprints or PCE scores to the classifier. Instead, it derives a fixed
 single-image vector from the same wavelet/spectral residual pipeline: residual
 energy and distribution, spectral flatness/bands, row/column and CFA
 periodicity, luminance coupling, block energy/consistency, and support masks.
-Eligibility is based only on whether the received encoded image supports a
-native-coordinate 512 px crop; no row is resized into eligibility. Before
-training, every split/label group must reach 95% support and the label gap must
-be at most five points. The experiment then compares PRNU-only and RINE+PRNU
+Eligibility is based only on whether each matched-clean received image supports
+a native-coordinate 256 px crop; no row is resized into eligibility. Before
+training, every matched-clean split/label group must reach 95% support and the
+label gap must be at most five points. Independently downscaled robustness views
+remain evaluation rows: when they are too small, their PRNU values are zero and
+their eligibility, validity, and confidence masks state that explicitly. The
+experiment then compares PRNU-only and RINE+PRNU
 across seeds 42/43/44 and every independent robustness cell. This is a forensic
 binary diagnostic, not camera identification or authentication.
 
 Run it after the original Task 8B manifest exists:
 
 ```bash
-make task8b-v2-prnu-validate
+make task8b-v2-prnu-validate PRNU_V2_CROP_SIZE=256
 ```
 
 The report is written to
-`artifacts/task8b_v2/audits/prnu_v2_signal_validation.json`; per-device
-fingerprints are written below `artifacts/task8b_v2/fingerprints`. The notebook
-syncs that complete directory into a sibling `task8b_v2` folder under the same
+`artifacts/task8b_v2/audits/prnu_v2_signal_validation.json`, with a size-specific
+copy at `prnu_v2_signal_validation_256.json`; per-device
+fingerprints are written below
+`artifacts/task8b_v2/fingerprints/crop_256`. The notebook syncs that complete
+directory into a sibling `task8b_v2` folder under the same
 Google Drive artifact root.
 
 ## Split and leakage contract

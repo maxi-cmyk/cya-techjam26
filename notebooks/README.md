@@ -67,9 +67,18 @@ scope.
 `08_prnu_v2_binary.ipynb` is a clean Colab GPU **Run all** workflow. It mounts
 Drive, stages only the selected 2,000 raw sources, byte-verifies regenerated
 fixed-Q96 views against the Notebook 07 manifest, and rebuilds or safely reuses
-the 19,460-image transform bank on Colab-local storage. It restores only the
-three durable controlled-RINE parents, applies the predeclared 512px
-balanced-coverage gate, extracts reference-free single-image PRNU-v2 summaries,
+the 19,460-image transform bank on Colab-local storage. Before doing that work,
+it requires a label-free PREMIER device-signal pass at the same 256 px protocol,
+reusing a verified Drive report or producing one from already-staged Task 8B
+data. It restores each durable controlled-RINE parent when available or retrains
+only a missing seed locally, then applies the predeclared 256 px matched-clean
+balanced-coverage gate and extracts reference-free single-image PRNU-v2 summaries,
 trains PRNU-only and RINE+PRNU across seeds 42/43/44, applies the locked 50/50
-and per-class gates, then hash-verifies the compact Drive sync. The transform
-cache stays local. It never uses device IDs, enrolled-camera PCE, or `final_test`.
+and per-class gates, then hash-verifies the compact Drive sync, including any
+reconstructed parent. The transform cache stays local. It never uses device IDs,
+enrolled-camera PCE, or `final_test`. Deliberately downscaled robustness views
+remain in the locked evaluation and use explicit zero-valued validity/confidence
+masks when they cannot support a 256 px crop. If matched-clean readiness fails,
+the notebook records and syncs `blocked_data_readiness` without training. The
+earlier 512 px audit remains preserved as evidence of an incompatible protocol;
+it is not treated as evidence that the 256 px experiment failed.

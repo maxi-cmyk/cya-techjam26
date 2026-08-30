@@ -477,7 +477,12 @@ class Task8BDatasetTests(unittest.TestCase):
             )
 
             self.assertTrue((artifact_root / "audits/prnu_v2_signal_validation.json").is_file())
-            self.assertEqual(len(list((artifact_root / "fingerprints").glob("*.npz"))), 2)
+            self.assertTrue(
+                (artifact_root / "audits/prnu_v2_signal_validation_128.json").is_file()
+            )
+            self.assertEqual(
+                len(list((artifact_root / "fingerprints/crop_128").glob("*.npz"))), 2
+            )
             self.assertFalse(report["binary_authenticity_labels_used"])
             self.assertFalse(report["selection_or_heldout_rows_read"])
             self.assertFalse(report["fusion_training_run"])

@@ -142,6 +142,77 @@ class PrnuRuntimeV2Tests(unittest.TestCase):
                 maximum_label_gap=0.0,
             )
 
+    def test_readiness_gates_clean_rows_but_allows_downscaled_eval_views(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = []
+            for split in ("seed_train", "selection_val"):
+                for label in ("authentic", "ai_generated"):
+                    for image_view, transform, size in (
+                        ("matched_clean", "clean", 128),
+                        ("benchmark", "resize", 64),
+                    ):
+                        sample_id = f"{split}-{label}-{image_view}"
+                        path = root / f"{sample_id}.png"
+                        Image.new("RGB", (size, size), (128, 128, 128)).save(path)
+                        rows.append(
+                            {
+                                "sample_id": sample_id,
+                                "source_id": f"source-{split}-{label}",
+                                "image_path": str(path),
+                                "sha256": sample_id,
+                                "label": label,
+                                "split": split,
+                                "image_view": image_view,
+                                "transform": transform,
+                            }
+                        )
+
+            report = audit_prnu_runtime_rows(
+                rows,
+                crop_size=128,
+                minimum_eligibility_rate=1.0,
+                maximum_label_gap=0.0,
+            )
+            manifest = root / "manifest.csv"
+            output = root / "features.csv"
+            write_manifest(manifest, rows)
+            extraction_report = extract_prnu_runtime_manifest(
+                manifest_path=manifest,
+                output_path=output,
+                report_path=root / "report.json",
+                cache_root=root / "cache",
+                matching_policy="fixed_q96",
+                configuration={
+                    "extractor_version": "fixture-clean-gate",
+                    "crop_size": 128,
+                    "wavelet": "db2",
+                    "wavelet_levels": 2,
+                    "edge_keep_quantile": 0.75,
+                    "block_size": 32,
+                    "minimum_eligibility_rate": 1.0,
+                    "maximum_label_gap": 0.0,
+                    "workers": 1,
+                    "sampling_epochs": 1,
+                },
+                workers=1,
+            )
+            with output.open(newline="", encoding="utf-8") as stream:
+                feature_rows = list(csv.DictReader(stream))
+
+        self.assertTrue(report["ready_for_binary_ablation"])
+        self.assertEqual(report["readiness_scope"], "matched_clean_rows_only")
+        self.assertTrue(all(group["eligibility_rate"] == 1.0 for group in report["groups"]))
+        self.assertTrue(
+            all(group["eligibility_rate"] == 0.5 for group in report["all_view_coverage_groups"])
+        )
+        self.assertTrue(extraction_report["ready_for_binary_ablation"])
+        benchmark_rows = [row for row in feature_rows if row["image_view"] == "benchmark"]
+        self.assertEqual(len(benchmark_rows), 4)
+        self.assertTrue(all(row["feature_valid"] == "true" for row in benchmark_rows))
+        self.assertTrue(all(float(row["prnu_v2_runtime_eligible"]) == 0.0 for row in benchmark_rows))
+        self.assertTrue(all(float(row["prnu_v2_runtime_valid"]) == 0.0 for row in benchmark_rows))
+
     def test_prnu_only_diagnostic_uses_complete_locked_selection_bank(self) -> None:
         cells = benchmark_cells(load_config("configs/colab.json"))
         train_clean = tuple(
