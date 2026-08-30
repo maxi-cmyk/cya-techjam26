@@ -64,10 +64,12 @@ and Lab features, applies incremental fusion gates, and freezes the evidence
 needed for the Task 9 handoff. Task 10 calibration and packaging remain out of
 scope.
 
-`08_prnu_v2_binary.ipynb` consumes the durable Notebook 07 robustness bank and
-controlled-RINE checkpoints. It applies the predeclared 512px balanced-coverage
-gate, extracts only reference-free single-image PRNU-v2 summaries, trains a
-PRNU-only diagnostic and RINE+PRNU across seeds 42/43/44, compares the fusion
-candidate with controlled RINE under the same locked 50/50 and per-class gates,
-and syncs the decision to Drive. It never uses device IDs, enrolled-camera PCE,
-or `final_test`.
+`08_prnu_v2_binary.ipynb` is a clean Colab GPU **Run all** workflow. It mounts
+Drive, stages only the selected 2,000 raw sources, byte-verifies regenerated
+fixed-Q96 views against the Notebook 07 manifest, and rebuilds or safely reuses
+the 19,460-image transform bank on Colab-local storage. It restores only the
+three durable controlled-RINE parents, applies the predeclared 512px
+balanced-coverage gate, extracts reference-free single-image PRNU-v2 summaries,
+trains PRNU-only and RINE+PRNU across seeds 42/43/44, applies the locked 50/50
+and per-class gates, then hash-verifies the compact Drive sync. The transform
+cache stays local. It never uses device IDs, enrolled-camera PCE, or `final_test`.
