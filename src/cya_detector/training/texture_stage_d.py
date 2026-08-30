@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 import time
+import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,8 +14,11 @@ from typing import Any
 import numpy as np
 
 from cya_detector.data.dataset import ManifestExample
+from cya_detector.evaluation.metrics import evaluate_predictions
 from cya_detector.features.texture import prepare_texture_patch_views, texture_patch_cache_key
 from cya_detector.models.clip_baseline import LoadedClip, require_ml_dependencies
+from cya_detector.models.texture import TEXTURE_VARIANTS, build_texture_head
+from cya_detector.predictions import PredictionRecord, write_predictions
 from cya_detector.training.clip_stage_a import cache_location
 from cya_detector.training.rine_stage_b import extract_rine_features
 
@@ -284,3 +289,245 @@ def extract_texture_features(
         "global_report": global_report,
     }
     return rows, report
+
+
+def _atomic_json(path: Path, value: dict[str, Any] | list[Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _atomic_predictions(path: Path, records: list[PredictionRecord]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    write_predictions(temporary, records)
+    temporary.replace(path)
+
+
+def _atomic_checkpoint(path: Path, *, model: Any, state: dict[str, Any]) -> None:
+    torch, _, _ = require_ml_dependencies()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    torch.save({"model_state_dict": model.state_dict(), **state}, temporary)
+    temporary.replace(path)
+
+
+def _load_cached_texture_rows(rows: list[CachedTextureFeatures]) -> tuple[Any, Any, Any, Any, list[CachedTextureFeatures], list[CachedTextureFeatures]]:
+    """Load each frozen cache exactly once after validating its clean-only contract."""
+
+    torch, _, _ = require_ml_dependencies()
+    if not rows:
+        raise ValueError("Texture training requires cached rows")
+    if any(row.example.split not in _ALLOWED_SPLITS for row in rows):
+        raise ValueError("Texture training accepts only seed_train and selection_val rows")
+    if any(row.example.image_view != "matched_clean" or row.example.transform != "clean" for row in rows):
+        raise ValueError("Texture training accepts only matched-clean clean rows")
+    train_rows = [row for row in rows if row.example.split == "seed_train"]
+    selection_rows = [row for row in rows if row.example.split == "selection_val"]
+    if not train_rows or not selection_rows:
+        raise ValueError("Texture training requires seed_train and selection_val rows")
+    if {row.example.target for row in train_rows} != {0, 1}:
+        raise ValueError("Texture training data must contain both classes")
+
+    loaded: list[tuple[CachedTextureFeatures, Any, Any, Any]] = []
+    for row in rows:
+        try:
+            global_features = torch.load(row.global_cache_path, map_location="cpu", weights_only=True)
+            patch_payload = torch.load(row.patch_cache_path, map_location="cpu", weights_only=True)
+            patch_features = patch_payload["patch_features"]
+            patch_mask = patch_payload["patch_mask"]
+        except (OSError, KeyError, RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError(f"Cannot load frozen texture caches for {row.example.sample_id}") from exc
+        if (
+            global_features.ndim != 2
+            or patch_features.ndim != 2
+            or patch_mask.ndim != 1
+            or patch_features.shape[0] != patch_mask.shape[0]
+            or patch_mask.dtype != torch.bool
+            or not global_features.dtype.is_floating_point
+            or not patch_features.dtype.is_floating_point
+            or not bool(torch.isfinite(global_features).all())
+            or not bool(torch.isfinite(patch_features[patch_mask]).all())
+            or not bool(patch_mask.any())
+        ):
+            raise ValueError("Frozen texture caches must be shape-valid with non-finite values refused")
+        loaded.append((row, global_features.float(), patch_features.float(), patch_mask))
+
+    global_shape = tuple(loaded[0][1].shape)
+    patch_shape = tuple(loaded[0][2].shape)
+    if any(tuple(global_features.shape) != global_shape or tuple(patch_features.shape) != patch_shape or tuple(mask.shape) != (patch_shape[0],) for _, global_features, patch_features, mask in loaded):
+        raise ValueError("Frozen texture cache shapes must agree across rows")
+
+    def stacked(split: str) -> tuple[Any, Any, Any, Any, list[CachedTextureFeatures]]:
+        selected = [value for value in loaded if value[0].example.split == split]
+        return (
+            torch.stack([value[1] for value in selected]),
+            torch.stack([value[2] for value in selected]),
+            torch.stack([value[3] for value in selected]),
+            torch.tensor([value[0].example.target for value in selected], dtype=torch.float32),
+            [value[0] for value in selected],
+        )
+
+    train_global, train_patch, train_mask, train_targets, ordered_train = stacked("seed_train")
+    selection_global, selection_patch, selection_mask, selection_targets, ordered_selection = stacked("selection_val")
+    return (
+        train_global, train_patch, train_mask, train_targets,
+        selection_global, selection_patch, selection_mask, selection_targets,
+        ordered_train, ordered_selection,
+    )
+
+
+def train_texture_head(
+    *,
+    rows: list[CachedTextureFeatures],
+    variant: str,
+    seed: int,
+    output_root: Path,
+    overwrite: bool,
+    run_configuration: dict[str, Any],
+    **optimization: Any,
+) -> dict[str, Any]:
+    """Train one lightweight head from frozen clean-only global and patch caches."""
+
+    torch, _, _ = require_ml_dependencies()
+    texture_config = run_configuration.get("texture", {})
+    configured_variants = tuple(texture_config.get("variants", TEXTURE_VARIANTS))
+    configured_seeds = tuple(texture_config.get("seeds", (42, 43, 44)))
+    if variant not in configured_variants or variant not in TEXTURE_VARIANTS:
+        raise ValueError("Texture training requires a configured texture variant")
+    if seed not in configured_seeds:
+        raise ValueError("Texture training requires a configured texture seed")
+    required = (
+        "device", "learning_rate", "weight_decay", "warmup_fraction", "max_epochs",
+        "early_stopping_patience", "physical_batch_size", "effective_batch_size", "threshold",
+    )
+    missing = [name for name in required if name not in optimization]
+    if missing:
+        raise ValueError(f"Missing texture optimization setting(s): {', '.join(missing)}")
+    device = str(optimization["device"])
+    physical_batch_size = int(optimization["physical_batch_size"])
+    effective_batch_size = int(optimization["effective_batch_size"])
+    max_epochs = int(optimization["max_epochs"])
+    if physical_batch_size <= 0 or effective_batch_size <= 0 or max_epochs <= 0:
+        raise ValueError("Texture batch sizes and max_epochs must be positive")
+
+    (
+        train_global, train_patch, train_mask, train_targets,
+        selection_global, selection_patch, selection_mask, _, _, selection_rows,
+    ) = _load_cached_texture_rows(rows)
+    run_root = Path(output_root) / variant / f"seed_{seed}"
+    completed_marker = run_root / "metadata" / "run_metadata.json"
+    if run_root.exists() and completed_marker.is_file() and not overwrite:
+        raise FileExistsError(f"Refusing completed texture run overwrite: {run_root}")
+    if run_root.exists() and not completed_marker.is_file():
+        raise FileExistsError(f"Refusing incomplete texture run overwrite: {run_root}")
+
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    layer_count, global_dimension = train_global.shape[1:]
+    _, patch_dimension = train_patch.shape[1:]
+    fusion_dimension = int(texture_config.get("fusion_dimension", 256))
+    model = build_texture_head(
+        variant=variant, layer_count=layer_count, global_dimension=global_dimension,
+        patch_dimension=patch_dimension, fusion_dimension=fusion_dimension,
+    ).to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=float(optimization["learning_rate"]),
+        weight_decay=float(optimization["weight_decay"]),
+    )
+    criterion = torch.nn.BCEWithLogitsLoss()
+    accumulation_steps = max(1, math.ceil(effective_batch_size / physical_batch_size))
+    generator = torch.Generator().manual_seed(seed)
+    loader = torch.utils.data.DataLoader(
+        torch.utils.data.TensorDataset(train_global, train_patch, train_mask, train_targets),
+        batch_size=physical_batch_size, shuffle=True, generator=generator,
+    )
+    total_steps = max(1, math.ceil(len(loader) / accumulation_steps) * max_epochs)
+    warmup_steps = int(total_steps * float(optimization["warmup_fraction"]))
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer, lambda step: (step + 1) / warmup_steps if warmup_steps and step < warmup_steps else 1.0,
+    )
+
+    staging = run_root.parent / f".{run_root.name}.tmp-{uuid.uuid4().hex}"
+    staging.mkdir(parents=True, exist_ok=False)
+    best_accuracy = -math.inf
+    best_predictions: list[PredictionRecord] = []
+    best_metrics: dict[str, Any] | None = None
+    history: list[dict[str, Any]] = []
+    patience = 0
+    try:
+        for epoch in range(1, max_epochs + 1):
+            model.train()
+            optimizer.zero_grad(set_to_none=True)
+            loss_total = 0.0
+            for step, (global_features, patch_features, patch_mask, targets) in enumerate(loader, start=1):
+                logits = model(global_features.to(device), patch_features.to(device), patch_mask.to(device)).squeeze(1)
+                loss = criterion(logits, targets.to(device))
+                if not bool(torch.isfinite(loss)):
+                    raise ValueError("Texture training refused a non-finite loss")
+                (loss / accumulation_steps).backward()
+                loss_total += float(loss.item())
+                if step % accumulation_steps == 0 or step == len(loader):
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), float(optimization.get("gradient_clip_norm", 1.0)))
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
+
+            model.eval()
+            with torch.inference_mode():
+                logits = model(selection_global.to(device), selection_patch.to(device), selection_mask.to(device)).squeeze(1).cpu()
+                probabilities = torch.sigmoid(logits)
+            predictions = [
+                PredictionRecord(
+                    sample_id=row.example.sample_id, source_id=row.example.source_id,
+                    parent_id=row.example.parent_id, split=row.example.split, label=row.example.label,
+                    logit=float(logit), probability=float(probability), checkpoint="best_clean",
+                    seed=seed, matching_policy="matched_clean", transform=row.example.transform,
+                    transform_parameter=row.example.transform_parameter, **row.example.metadata,
+                )
+                for row, logit, probability in zip(selection_rows, logits.tolist(), probabilities.tolist(), strict=True)
+            ]
+            metrics = evaluate_predictions(predictions, threshold=float(optimization["threshold"]))
+            accuracy = metrics["clean"]["accuracy"]
+            history.append({"epoch": epoch, "training_loss": loss_total / len(loader), "clean_accuracy": accuracy})
+            state = {"stage": "texture_stage_d", "variant": variant, "seed": seed, "epoch": epoch}
+            _atomic_checkpoint(staging / "checkpoints" / "latest.pt", model=model, state=state)
+            if accuracy > best_accuracy:
+                best_accuracy, best_predictions, best_metrics = accuracy, predictions, metrics
+                patience = 0
+                _atomic_checkpoint(staging / "checkpoints" / "best_clean.pt", model=model, state=state)
+            else:
+                patience += 1
+                if patience >= int(optimization["early_stopping_patience"]):
+                    break
+
+        if best_metrics is None:
+            raise ValueError("Texture training produced no selection metrics")
+        _atomic_predictions(staging / "predictions" / "selection_val.csv", best_predictions)
+        _atomic_json(staging / "reports" / "metrics.json", {"selection_split": "selection_val", **best_metrics})
+        _atomic_json(staging / "reports" / "training_history.json", {"history": history})
+        _atomic_json(staging / "metadata" / "run_metadata.json", {
+            "status": "completed", "stage": "texture_stage_d", "variant": variant, "seed": seed,
+            "allowed_splits": sorted(_ALLOWED_SPLITS), "run_configuration": run_configuration,
+            "optimization": optimization, "accumulation_steps": accumulation_steps, "warmup_steps": warmup_steps,
+        })
+        if run_root.exists():
+            import shutil
+            previous = run_root.parent / f".{run_root.name}.previous-{uuid.uuid4().hex}"
+            run_root.replace(previous)
+            try:
+                staging.replace(run_root)
+            except Exception:
+                previous.replace(run_root)
+                raise
+            shutil.rmtree(previous)
+        else:
+            staging.replace(run_root)
+    except Exception:
+        import shutil
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return {"status": "completed", "run_root": str(run_root), "best_clean_accuracy": best_accuracy, "epochs_completed": len(history)}
