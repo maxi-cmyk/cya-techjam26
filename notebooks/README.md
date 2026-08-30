@@ -21,9 +21,10 @@ Task 8B can use source files extracted directly at
 `/content/hackathon_data/raw/task8b`, without modifying the shared Drive. An
 optional personal source copy can live at
 `My Drive/cya-techjam26-data/raw/task8b`. Results are written first to
-`/content/cya-techjam26/artifacts/task8b`. Copy completed results into the existing
-Drive artifact root at `My Drive/cya-techjam26/artifacts/task8b`. The repository
-does not download or upload the licensed datasets automatically; follow
+`/content/cya-techjam26/artifacts/task8b`. The final Task 8B cell uses the same
+authenticated Drive API session to upsert durable results into the existing
+[`artifacts`](https://drive.google.com/drive/folders/1uv0sa041-6N-Vg8tdtb5in0GgWBR-SFz)
+root, so mounting My Drive is not required. Follow
 [`docs/data/task8b_dataset.md`](../docs/data/task8b_dataset.md) for the inventory
 and license checks.
 
@@ -46,6 +47,8 @@ the notebook creates the reviewed inventory and builds the
 device/generator-grouped manifest, builds the 256 px matched TIFF view, runs the
 source and matched nuisance gates, compares single-image and multi-image PRNU
 without binary labels, records the retain/reject decision, and syncs reports to
-the existing Drive artifact root. It stops before model fitting whenever source,
-nuisance, or physical-estimator validation fails. The current licensed pilot
-finishes with no physical feature retained.
+an `artifacts/task8b` Drive folder without requiring a mounted Drive. Durable
+audits, manifests, fingerprints, reports, features, and checkpoints are synced;
+the reproducible matched-view image cache remains local. It stops before model
+fitting whenever source, nuisance, or physical-estimator validation fails. The
+current licensed pilot finishes with no physical feature retained.

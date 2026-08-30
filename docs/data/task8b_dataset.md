@@ -168,16 +168,19 @@ No additional Drive root is introduced.
     ├── checkpoints/
     └── reports/
 
-/content/drive/MyDrive/cya-techjam26/artifacts/
-└── task8b/                        optional durable result copy
+Google Drive artifacts root (ID 1uv0sa041-6N-Vg8tdtb5in0GgWBR-SFz)
+└── task8b/                        durable API-synced result copy
 
 /content/drive/MyDrive/cya-techjam26-data/
 └── raw/task8b/                    optional personal source copy
 ```
 
 Raw images stay under `hackathon_data`. Manifests, reports, features,
-fingerprints, and checkpoints stay under `artifacts/task8b`. Both roots are
-already ignored by Git.
+fingerprints, and checkpoints stay under `artifacts/task8b`. Both local roots
+are ignored by Git. The notebook syncs durable Task 8B outputs directly through
+the authenticated Drive API; mounting My Drive is optional. The reproducible
+`matched_views/images` cache stays local rather than creating more than one
+thousand Drive files.
 
 ## Curated inventory contract
 
@@ -279,11 +282,11 @@ to pass. Its report distinguishes `source_ready`, `prnu_reference.ready`,
 `chromatic_aberration.ready`, and `training_ready`. The second command reruns the
 source gate and then builds training-only reference fingerprints. The remaining
 commands materialize and audit the matched view, validate PRNU without binary
-labels, and record the fail-closed retain/reject decision. Copy
-the completed `artifacts/task8b` directory to the configured
-`drive_artifact_root` for durable storage.
+labels, and record the fail-closed retain/reject decision. The final notebook
+cell upserts the durable result directories into the existing Google Drive
+artifacts root for persistent storage.
 
-None of these commands downloads third-party data or uploads results automatically.
+None of these Make commands downloads third-party data or uploads results automatically.
 The thin Colab launcher
 [`06_task8b_native_physical.ipynb`](../../notebooks/06_task8b_native_physical.ipynb)
 performs local staging, runs these gates, and syncs completed Task 8B artifacts
