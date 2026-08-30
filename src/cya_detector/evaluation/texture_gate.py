@@ -78,6 +78,18 @@ def _load_completed_run(root: Path, variant: str, seed: int) -> tuple[list[Predi
         or metadata.get("seed") != seed or metadata.get("matching_policy") != APPROVED_MATCHING_POLICY
     ):
         raise ValueError(f"Texture gate requires completed fixed_q96 run metadata: {run_root}")
+    committed_hashes = metadata.get("artifact_sha256")
+    expected_paths = [path.relative_to(run_root) for path in paths if path.name != "run_metadata.json"]
+    if (
+        not isinstance(committed_hashes, dict)
+        or set(committed_hashes) != {str(path).replace("\\", "/") for path in expected_paths}
+        or any(
+            not isinstance(digest, str)
+            or hashlib.sha256((run_root / relative).read_bytes()).hexdigest() != digest
+            for relative, digest in committed_hashes.items()
+        )
+    ):
+        raise ValueError(f"Texture gate requires one transactionally committed artifact set: {run_root}")
     if metrics.get("selection_split") != "selection_val" or metrics.get("matching_policy") != APPROVED_MATCHING_POLICY:
         raise ValueError(f"Texture gate requires fixed_q96 selection metrics: {run_root}")
     if not isinstance(metrics.get("inference"), dict) or not isinstance(metrics.get("task4_extraction"), dict):

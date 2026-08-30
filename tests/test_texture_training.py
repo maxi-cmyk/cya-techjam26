@@ -62,10 +62,14 @@ class TextureTrainingTests(unittest.TestCase):
             if nonfinite and sample_id == "train-authentic":
                 global_tensor[0, 0] = torch.nan
             torch.save(global_tensor, global_path)
+            global_path.with_suffix(".meta.json").write_text(
+                json.dumps({"matching_policy": "fixed_q96"}), encoding="utf-8"
+            )
             torch.save(
                 {
                     "patch_features": torch.full((4, 2), value, dtype=torch.float32),
                     "patch_mask": torch.tensor([True, True, False, False]),
+                    "cache_contract": {"matching_policy": "fixed_q96"},
                 },
                 patch_path,
             )
@@ -78,6 +82,7 @@ class TextureTrainingTests(unittest.TestCase):
         task4_extraction_report = changes.pop(
             "task4_extraction_report", {"elapsed_seconds": 0.01, "peak_gpu_memory_bytes": 0}
         )
+        learning_rate = changes.pop("learning_rate", 0.01)
 
         return train_texture_head(
             rows=self.rows if rows is None else rows,
@@ -87,7 +92,7 @@ class TextureTrainingTests(unittest.TestCase):
             overwrite=overwrite,
             run_configuration=self.configuration,
             device="cpu",
-            learning_rate=0.01,
+            learning_rate=learning_rate,
             weight_decay=0.0,
             warmup_fraction=0.0,
             max_epochs=2,
@@ -135,16 +140,38 @@ class TextureTrainingTests(unittest.TestCase):
     def test_failed_overwrite_keeps_the_completed_canonical_run(self) -> None:
         output_root = self.root / "interrupted-overwrite"
         first = self._train(root=output_root)
-        metadata_path = Path(first["run_root"]) / "metadata" / "run_metadata.json"
-        original_metadata = metadata_path.read_bytes()
+        run_root = Path(first["run_root"])
+        metadata_path = run_root / "metadata" / "run_metadata.json"
+        original_metadata = json.loads(metadata_path.read_text())
+        from cya_detector.training import texture_stage_d
+
+        original_replace = texture_stage_d._replace_published_file
+        replacement_count = 0
+
+        def interrupt_metadata_commit(source: Path, destination: Path) -> None:
+            nonlocal replacement_count
+            replacement_count += 1
+            if replacement_count == 6:
+                raise OSError("interrupted replacement")
+            original_replace(source, destination)
+
         with patch(
             "cya_detector.training.texture_stage_d._replace_published_file",
-            side_effect=OSError("interrupted replacement"),
+            side_effect=interrupt_metadata_commit,
         ):
             with self.assertRaisesRegex(OSError, "interrupted replacement"):
-                self._train(root=output_root, overwrite=True)
+                self._train(
+                    root=output_root,
+                    overwrite=True,
+                    task4_extraction_report={"elapsed_seconds": 2.0, "peak_gpu_memory_bytes": 0},
+                )
         self.assertTrue(metadata_path.is_file())
-        self.assertEqual(metadata_path.read_bytes(), original_metadata)
+        self.assertEqual(json.loads(metadata_path.read_text()), original_metadata)
+        self.assertIn("artifact_sha256", original_metadata)
+        self.assertTrue(any(
+            hashlib.sha256((run_root / relative).read_bytes()).hexdigest() != digest
+            for relative, digest in original_metadata["artifact_sha256"].items()
+        ))
 
     def test_rejects_nonfinite_features_before_creating_a_run_directory(self) -> None:
         output_root = self.root / "nonfinite-runs"
@@ -213,6 +240,17 @@ class TextureTrainingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fixed_q96"):
             self._train(root=self.root / "uniform", rows=rows)
 
+    def test_rejects_spoofed_wrapper_provenance_when_cache_contract_is_not_fixed_q96(self) -> None:
+        rows = self._cached_rows()
+        rows[0].global_cache_path.with_suffix(".meta.json").write_text(
+            json.dumps({"matching_policy": "uniform_q95_q100"}), encoding="utf-8"
+        )
+        payload = torch.load(rows[0].patch_cache_path, weights_only=True)
+        payload["cache_contract"]["matching_policy"] = "uniform_q95_q100"
+        torch.save(payload, rows[0].patch_cache_path)
+        with self.assertRaisesRegex(ValueError, "fixed_q96"):
+            self._train(root=self.root / "spoofed-wrapper", rows=rows)
+
     def test_missing_cached_provenance_fails_closed(self) -> None:
         rows = [
             CachedTextureFeatures(row.example, row.global_cache_path, row.patch_cache_path)
@@ -238,6 +276,22 @@ class TextureTrainingTests(unittest.TestCase):
         self.assertGreater(metrics["inference"]["latency_seconds"], 0.0)
         self.assertGreaterEqual(metrics["inference"]["peak_memory_bytes"], 0)
         self.assertEqual(metrics["task4_extraction"]["elapsed_seconds"], 1.25)
+
+    def test_writes_a_trainable_payload_from_task4_cache_rows(self) -> None:
+        from cya_detector.training.texture_stage_d import (
+            read_cached_texture_features_payload,
+            write_cached_texture_features_payload,
+        )
+
+        payload_path = self.root / "task4-cache-rows.json"
+        report = {"elapsed_seconds": 1.25, "peak_gpu_memory_bytes": 0}
+        write_cached_texture_features_payload(
+            payload_path, rows=self.rows, task4_extraction_report=report
+        )
+        rows, restored_report = read_cached_texture_features_payload(payload_path)
+        self.assertEqual(restored_report, report)
+        self.assertEqual(rows, self.rows)
+        self.assertEqual(json.loads(payload_path.read_text())["matching_policy"], "fixed_q96")
 
     def test_cuda_determinism_fails_closed_when_torch_cannot_guarantee_it(self) -> None:
         def deterministic_only(enabled: bool, *, warn_only: bool) -> None:

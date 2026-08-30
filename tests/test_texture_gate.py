@@ -22,6 +22,17 @@ class TextureGateTests(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
 
     @staticmethod
+    def _commit_run(run_root: Path) -> None:
+        metadata_path = run_root / "metadata" / "run_metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["artifact_sha256"] = {
+            str(item.relative_to(run_root)).replace("\\", "/"): hashlib.sha256(item.read_bytes()).hexdigest()
+            for item in run_root.rglob("*")
+            if item.is_file() and item != metadata_path
+        }
+        metadata_path.write_text(json.dumps(metadata))
+
+    @staticmethod
     def _records(seed: int, probabilities: tuple[float, ...], *, transform: str = "clean") -> list[PredictionRecord]:
         return [
             PredictionRecord(
@@ -62,6 +73,7 @@ class TextureGateTests(unittest.TestCase):
                     "status": "completed", "variant": variant, "seed": seed,
                     "matching_policy": "fixed_q96",
                 }))
+                self._commit_run(run_root)
 
     def _compare(self):
         from cya_detector.evaluation.texture_gate import compare_texture_pilot
@@ -113,6 +125,7 @@ class TextureGateTests(unittest.TestCase):
         records = self._records(42, (0.2, 0.3, 0.1, 0.8, 0.9, 0.9))
         records[0] = PredictionRecord(**{**records[0].__dict__, "sample_id": "different"})
         write_predictions(path, records)
+        self._commit_run(path.parents[1])
         with self.assertRaisesRegex(ValueError, "sample"):
             self._compare()
         self._write_nine_runs(transform="jpeg")
@@ -143,6 +156,7 @@ class TextureGateTests(unittest.TestCase):
         records = self._records(42, (0.2, 0.3, 0.1, 0.8, 0.9, 0.9))
         records[0] = PredictionRecord(**{**records[0].__dict__, "matching_policy": "uniform_q95_q100"})
         write_predictions(path, records)
+        self._commit_run(path.parents[1])
         with self.assertRaisesRegex(ValueError, "fixed_q96"):
             self._compare()
         self._write_nine_runs()
@@ -153,6 +167,7 @@ class TextureGateTests(unittest.TestCase):
             writer = csv.DictWriter(stream, fieldnames=rows[0].keys())
             writer.writeheader()
             writer.writerows(rows)
+        self._commit_run(path.parents[1])
         with self.assertRaisesRegex(ValueError, "non-finite"):
             self._compare()
 
@@ -162,7 +177,15 @@ class TextureGateTests(unittest.TestCase):
         metrics = json.loads(path.read_text())
         metrics["inference"]["latency_seconds"] = None
         path.write_text(json.dumps(metrics))
+        self._commit_run(path.parents[1])
         with self.assertRaisesRegex(ValueError, "measurement"):
+            self._compare()
+
+    def test_rejects_a_mixed_overwrite_that_has_not_reached_the_metadata_commit(self) -> None:
+        self._write_nine_runs()
+        checkpoint = self.root / "global_local" / "seed_42" / "checkpoints" / "latest.pt"
+        checkpoint.write_bytes(b"new-generation-checkpoint")
+        with self.assertRaisesRegex(ValueError, "transactionally committed"):
             self._compare()
 
 

@@ -14,9 +14,9 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from cya_detector.config import load_config  # noqa: E402
-from cya_detector.data.dataset import ManifestExample  # noqa: E402
 from cya_detector.training.texture_stage_d import (  # noqa: E402
-    CachedTextureFeatures, LOCKED_TEXTURE_SEEDS, LOCKED_TEXTURE_VARIANTS, train_texture_head,
+    LOCKED_TEXTURE_SEEDS, LOCKED_TEXTURE_VARIANTS, read_cached_texture_features_payload,
+    train_texture_head,
 )
 
 
@@ -33,27 +33,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _cached_payload(path: Path) -> tuple[list[CachedTextureFeatures], dict[str, object]]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list) or not isinstance(payload.get("task4_extraction_report"), dict):
-        raise ValueError("--cached-features must be a JSON object with rows and task4_extraction_report")
-    rows = [
-        CachedTextureFeatures(
-            example=ManifestExample(**row["example"]),
-            global_cache_path=Path(row["global_cache_path"]), patch_cache_path=Path(row["patch_cache_path"]),
-            matching_policy=row.get("matching_policy", ""),
-        )
-        for row in payload["rows"]
-    ]
-    return rows, payload["task4_extraction_report"]
-
-
 def main() -> int:
     args = parse_args()
     config = load_config(args.config)
     experiment_root = args.output_root / config["texture"]["experiment_name"]
     optimization = config["optimization"]
-    rows, extraction_report = _cached_payload(args.cached_features)
+    rows, extraction_report = read_cached_texture_features_payload(args.cached_features)
     summary = train_texture_head(
         rows=rows, variant=args.variant, seed=args.seed,
         output_root=experiment_root, overwrite=args.overwrite, run_configuration=config,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import time
 import uuid
@@ -45,6 +46,7 @@ def _contract(
     patch_size: int,
     patch_count: int,
     boxes: tuple[tuple[int, int, int, int], ...],
+    matching_policy: str,
 ) -> dict[str, Any]:
     return {
         "model_identifier": loaded_clip.identifier,
@@ -55,6 +57,7 @@ def _contract(
         "patch_count": patch_count,
         "patch_boxes": [list(box) for box in boxes],
         "projection_dimension": loaded_clip.embedding_dimension,
+        "matching_policy": matching_policy,
     }
 
 
@@ -230,7 +233,7 @@ def extract_texture_features(
         contract = _contract(
             loaded_clip=loaded_clip, preprocessing_version=preprocessing_version,
             texture_extractor_version=texture_extractor_version, patch_size=patch_size,
-            patch_count=patch_count, boxes=views.patch_boxes,
+            patch_count=patch_count, boxes=views.patch_boxes, matching_policy=matching_policy,
         )
         key = texture_patch_cache_key(
             image_sha256=example.sha256, patch_boxes=views.patch_boxes,
@@ -320,6 +323,65 @@ def _atomic_checkpoint(path: Path, *, model: Any, state: dict[str, Any]) -> None
     temporary.replace(path)
 
 
+def write_cached_texture_features_payload(
+    path: Path, *, rows: list[CachedTextureFeatures], task4_extraction_report: dict[str, Any],
+) -> None:
+    """Serialize the supported handoff from Task 4 extraction to Task 5 training."""
+
+    if any(row.matching_policy != APPROVED_MATCHING_POLICY for row in rows):
+        raise ValueError("Task 4 cache payload requires fixed_q96 cached provenance")
+    payload = {
+        "schema_version": 1,
+        "matching_policy": APPROVED_MATCHING_POLICY,
+        "rows": [
+            {
+                "example": {
+                    **row.example.__dict__,
+                    "image_path": str(row.example.image_path),
+                },
+                "global_cache_path": str(row.global_cache_path),
+                "patch_cache_path": str(row.patch_cache_path),
+                "matching_policy": row.matching_policy,
+            }
+            for row in rows
+        ],
+        "task4_extraction_report": task4_extraction_report,
+    }
+    _atomic_json(Path(path), payload)
+
+
+def read_cached_texture_features_payload(path: Path) -> tuple[list[CachedTextureFeatures], dict[str, Any]]:
+    """Load the versioned Task 4 cache handoff accepted by texture training."""
+
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        rows_payload = payload["rows"]
+        report = payload["task4_extraction_report"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("Task 4 cache payload must contain rows and task4_extraction_report") from exc
+    if (
+        not isinstance(payload, dict) or payload.get("schema_version") != 1
+        or payload.get("matching_policy") != APPROVED_MATCHING_POLICY
+        or not isinstance(rows_payload, list) or not isinstance(report, dict)
+    ):
+        raise ValueError("Task 4 cache payload requires schema version 1 and fixed_q96 provenance")
+    try:
+        rows = [
+            CachedTextureFeatures(
+                example=ManifestExample(**{**row["example"], "image_path": Path(row["example"]["image_path"])}),
+                global_cache_path=Path(row["global_cache_path"]),
+                patch_cache_path=Path(row["patch_cache_path"]),
+                matching_policy=row["matching_policy"],
+            )
+            for row in rows_payload
+        ]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("Task 4 cache payload contains an invalid cached row") from exc
+    if any(row.matching_policy != APPROVED_MATCHING_POLICY for row in rows):
+        raise ValueError("Task 4 cache payload requires fixed_q96 cached provenance")
+    return rows, report
+
+
 def _require_finite(value: Any, *, name: str) -> None:
     """Reject non-finite numerical data before it can become a published artifact."""
 
@@ -339,8 +401,19 @@ def _replace_published_file(source: Path, destination: Path) -> None:
     source.replace(destination)
 
 
+def _artifact_sha256(root: Path) -> dict[str, str]:
+    """Hash every immutable run artifact except the metadata commit record itself."""
+
+    metadata = Path("metadata") / "run_metadata.json"
+    return {
+        str(path.relative_to(root)).replace("\\", "/"): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(path for path in root.rglob("*") if path.is_file())
+        if path.relative_to(root) != metadata
+    }
+
+
 def _publish_staged_run(staging: Path, run_root: Path) -> None:
-    """Publish a staged overwrite file-by-file, keeping a complete canonical run present."""
+    """Commit one staged run with metadata-last content hashes as the consumer boundary."""
 
     if not run_root.exists():
         staging.replace(run_root)
@@ -377,12 +450,21 @@ def _load_cached_texture_rows(rows: list[CachedTextureFeatures]) -> tuple[Any, A
     loaded: list[tuple[CachedTextureFeatures, Any, Any, Any]] = []
     for row in rows:
         try:
+            global_contract = json.loads(_global_metadata_path(row.global_cache_path).read_text(encoding="utf-8"))
             global_features = torch.load(row.global_cache_path, map_location="cpu", weights_only=True)
             patch_payload = torch.load(row.patch_cache_path, map_location="cpu", weights_only=True)
             patch_features = patch_payload["patch_features"]
             patch_mask = patch_payload["patch_mask"]
-        except (OSError, KeyError, RuntimeError, TypeError, ValueError) as exc:
+            patch_contract = patch_payload["cache_contract"]
+        except (OSError, KeyError, RuntimeError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError(f"Cannot load frozen texture caches for {row.example.sample_id}") from exc
+        if (
+            not isinstance(global_contract, dict)
+            or not isinstance(patch_contract, dict)
+            or global_contract.get("matching_policy") != APPROVED_MATCHING_POLICY
+            or patch_contract.get("matching_policy") != APPROVED_MATCHING_POLICY
+        ):
+            raise ValueError("Frozen texture cache contracts require fixed_q96 provenance")
         if (
             global_features.ndim != 2
             or patch_features.ndim != 2
@@ -572,12 +654,14 @@ def train_texture_head(
             "inference": best_inference, "task4_extraction": extraction_report, **best_metrics,
         })
         _atomic_json(staging / "reports" / "training_history.json", {"history": history})
-        _atomic_json(staging / "metadata" / "run_metadata.json", {
+        run_metadata = {
             "status": "completed", "stage": "texture_stage_d", "variant": variant, "seed": seed,
             "matching_policy": APPROVED_MATCHING_POLICY,
             "allowed_splits": sorted(_ALLOWED_SPLITS), "run_configuration": run_configuration,
             "optimization": optimization, "accumulation_steps": accumulation_steps, "warmup_steps": warmup_steps,
-        })
+            "artifact_sha256": _artifact_sha256(staging),
+        }
+        _atomic_json(staging / "metadata" / "run_metadata.json", run_metadata)
         _publish_staged_run(staging, run_root)
     except Exception:
         import shutil
