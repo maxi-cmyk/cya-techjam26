@@ -122,8 +122,9 @@ def _jpeg(rgb: Image.Image, cell: TransformCell) -> TransformResult:
     if isinstance(quality, bool) or not isinstance(quality, int) or not 1 <= quality <= 100:
         raise TransformContractError(f"Invalid JPEG quality: {quality!r}")
 
+    pixel_only = Image.frombytes("RGB", rgb.size, rgb.tobytes())
     encoded = io.BytesIO()
-    rgb.save(
+    pixel_only.save(
         encoded,
         format="JPEG",
         quality=quality,

@@ -61,6 +61,29 @@ class ControlledSamplerTests(unittest.TestCase):
             self.assertEqual(set(counts), {cell.cell_id for cell in self.cells})
             self.assertLessEqual(max(counts.values()) - min(counts.values()), 1)
 
+    def test_irregular_epochs_keep_global_cell_counts_uniform_including_zeros(self) -> None:
+        cell_ids = [cell.cell_id for cell in self.cells]
+        for epoch_size in (1, 2, 3, 14, 15, 29, 58, 113):
+            with self.subTest(epoch_size=epoch_size):
+                schedule = self.schedule(epoch=2, epoch_size=epoch_size)
+                global_counts = Counter(
+                    view.cell_id for view in schedule if view.cell_id != "clean"
+                )
+                counts_with_zeros = [global_counts[cell_id] for cell_id in cell_ids]
+                self.assertLessEqual(max(counts_with_zeros) - min(counts_with_zeros), 1)
+
+                for label in ("authentic", "ai_generated"):
+                    label_counts = Counter(
+                        view.cell_id
+                        for view in schedule
+                        if view.label == label and view.cell_id != "clean"
+                    )
+                    per_label_with_zeros = [label_counts[cell_id] for cell_id in cell_ids]
+                    self.assertLessEqual(
+                        max(per_label_with_zeros) - min(per_label_with_zeros),
+                        1,
+                    )
+
     def test_parents_cycle_uniformly_per_label(self) -> None:
         schedule = self.schedule(epoch=0)
 
@@ -168,6 +191,24 @@ class ControlledSamplerTests(unittest.TestCase):
                     self.records,
                     self.cells,
                     epoch_size=epoch_size,
+                    project_seed=42,
+                    epoch=0,
+                )
+
+    def test_requires_exact_configured_transform_cell_ids(self) -> None:
+        invalid_cell_sets = {
+            "missing": self.cells[:-1],
+            "extra": self.cells
+            + (TransformCell("blur", 3.0, "blur_sigma_3.0", "PNG"),),
+            "duplicate": self.cells + (self.cells[0],),
+        }
+
+        for case, cells in invalid_cell_sets.items():
+            with self.subTest(case=case), self.assertRaisesRegex(ValueError, "cell"):
+                build_controlled_epoch(
+                    self.records,
+                    cells,
+                    epoch_size=14,
                     project_seed=42,
                     epoch=0,
                 )

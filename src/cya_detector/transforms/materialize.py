@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import tempfile
+import zlib
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+import numpy as np
+from PIL import Image, features
 from PIL import __version__ as pillow_version
 
 from cya_detector.data.manifest import (
@@ -32,6 +35,18 @@ from cya_detector.transforms.benchmark import (
 
 class TransformMaterializationError(RuntimeError):
     """Raised when a benchmark variant cannot be safely persisted."""
+
+
+def _environment_provenance() -> dict[str, str]:
+    jpeg_library_version = features.version("jpg")
+    return {
+        "python_version": platform.python_version(),
+        "numpy_version": np.__version__,
+        "pillow_version": pillow_version,
+        "jpeg_library_version": jpeg_library_version or "unknown",
+        "zlib_version": zlib.ZLIB_RUNTIME_VERSION,
+        "numpy_bit_generator": type(np.random.default_rng(0).bit_generator).__name__,
+    }
 
 
 def _compact_json(value: dict[str, Any]) -> str:
@@ -76,6 +91,50 @@ def _validated_inputs(
             raise TransformContractError(f"Duplicate benchmark cell_id: {cell.cell_id!r}")
         seen_cell_ids.add(cell.cell_id)
     return parents, ordered_cells
+
+
+def _image_destination(output_root: Path, parent_id: str, cell: TransformCell) -> Path:
+    extension = ".jpg" if cell.output_format == "JPEG" else ".png"
+    return output_root / cell.cell_id / f"{parent_id}{extension}"
+
+
+def _reject_path_aliases(
+    *,
+    input_manifest: Path,
+    output_root: Path,
+    output_manifest: Path,
+    report_path: Path,
+    parents: Sequence[dict[str, str]],
+    cells: Sequence[TransformCell],
+) -> None:
+    planned_paths: list[tuple[str, Path]] = [
+        ("input_manifest", input_manifest),
+        ("output_manifest", output_manifest),
+        ("report_path", report_path),
+    ]
+    planned_paths.extend(
+        (
+            f"image_destination[{parent['sample_id']}:{cell.cell_id}]",
+            _image_destination(output_root, parent["sample_id"], cell),
+        )
+        for parent in parents
+        for cell in cells
+    )
+
+    owners_by_path: dict[Path, str] = {}
+    for owner, path in planned_paths:
+        try:
+            resolved = path.resolve()
+        except OSError as exc:
+            raise TransformMaterializationError(
+                f"Could not resolve planned path for {owner}: {path}"
+            ) from exc
+        previous_owner = owners_by_path.get(resolved)
+        if previous_owner is not None:
+            raise TransformMaterializationError(
+                f"Unsafe path alias between {previous_owner} and {owner}: {resolved}"
+            )
+        owners_by_path[resolved] = owner
 
 
 def _save_verified_sibling(
@@ -174,8 +233,7 @@ def _materialize_one(
             f"Could not read benchmark parent {parent_path}: {exc}"
         ) from exc
 
-    extension = ".jpg" if cell.output_format == "JPEG" else ".png"
-    destination = output_root / cell.cell_id / f"{parent_id}{extension}"
+    destination = _image_destination(output_root, parent_id, cell)
     output_hash, width, height, image_format, mode, file_size = _save_verified_sibling(
         image=result.image,
         encoded_bytes=result.encoded_bytes,
@@ -253,6 +311,14 @@ def materialize_benchmarks(
         benchmark_cells(config) if cells is None else cells,
         config,
     )
+    _reject_path_aliases(
+        input_manifest=input_manifest,
+        output_root=output_root,
+        output_manifest=output_manifest,
+        report_path=report_path,
+        parents=parents,
+        cells=ordered_cells,
+    )
     output_records = [
         _materialize_one(
             parent=parent,
@@ -285,6 +351,7 @@ def materialize_benchmarks(
         "transform_version": config["transform_engine"]["version"],
         "preprocessing_version": config["transform_engine"]["preprocessing_version"],
         "encoder_version": f"Pillow-{pillow_version}",
+        **_environment_provenance(),
     }
     write_json(report_path, report)
     return report

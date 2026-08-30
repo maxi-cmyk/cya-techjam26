@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import platform
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
-from PIL import Image
+import numpy as np
+from PIL import Image, features
+from PIL import __version__ as pillow_version
 
 from cya_detector.config import load_config
 from cya_detector.data.manifest import (
@@ -178,6 +182,27 @@ class TransformMaterializationTests(unittest.TestCase):
 
         self.assertFalse(list((self.root / "variants").rglob("*.tmp*")))
 
+    def test_report_records_exact_runtime_and_codec_provenance(self) -> None:
+        report = self._materialize()
+
+        expected = {
+            "python_version": platform.python_version(),
+            "numpy_version": np.__version__,
+            "pillow_version": pillow_version,
+            "jpeg_library_version": features.version("jpg") or "unknown",
+            "zlib_version": zlib.ZLIB_RUNTIME_VERSION,
+            "numpy_bit_generator": type(np.random.default_rng(0).bit_generator).__name__,
+        }
+        for key, value in expected.items():
+            self.assertEqual(report[key], value)
+        if features.version("jpg") is not None:
+            self.assertNotEqual(report["jpeg_library_version"], "unknown")
+        else:
+            self.assertEqual(report["jpeg_library_version"], "unknown")
+        persisted = json.loads((self.root / "report.json").read_text(encoding="utf-8"))
+        for key, value in expected.items():
+            self.assertEqual(persisted[key], value)
+
     def test_jpeg_materialization_persists_the_single_encoder_stream(self) -> None:
         self._materialize()
         jpeg_row = next(
@@ -204,6 +229,45 @@ class TransformMaterializationTests(unittest.TestCase):
         self.assertFalse((self.root / "variants").exists())
         self.assertFalse((self.root / "variants.csv").exists())
         self.assertFalse((self.root / "report.json").exists())
+
+    def test_output_manifest_cannot_alias_input_manifest(self) -> None:
+        input_before = self.manifest.read_bytes()
+
+        with self.assertRaisesRegex(TransformMaterializationError, "alias"):
+            self._materialize(output_manifest=self.manifest)
+
+        self.assertEqual(self.manifest.read_bytes(), input_before)
+        self.assertFalse((self.root / "variants").exists())
+        self.assertFalse((self.root / "report.json").exists())
+
+    def test_report_cannot_alias_output_manifest(self) -> None:
+        shared_path = self.root / "shared-output.json"
+        input_before = self.manifest.read_bytes()
+
+        with self.assertRaisesRegex(TransformMaterializationError, "alias"):
+            self._materialize(output_manifest=shared_path, report_path=shared_path)
+
+        self.assertEqual(self.manifest.read_bytes(), input_before)
+        self.assertFalse(shared_path.exists())
+        self.assertFalse((self.root / "variants").exists())
+
+    def test_report_cannot_alias_a_planned_image_destination(self) -> None:
+        output_root = self.root / "alias-variants"
+        first_parent_id = min(self.parent_ids)
+        planned_destination = (
+            output_root / self.jpeg_cell.cell_id / f"{first_parent_id}.jpg"
+        )
+        input_before = self.manifest.read_bytes()
+
+        with self.assertRaisesRegex(TransformMaterializationError, "alias"):
+            self._materialize(
+                output_root=output_root,
+                report_path=planned_destination,
+            )
+
+        self.assertEqual(self.manifest.read_bytes(), input_before)
+        self.assertFalse(output_root.exists())
+        self.assertFalse((self.root / "variants.csv").exists())
 
     def test_differing_output_collision_requires_explicit_overwrite(self) -> None:
         self._materialize()

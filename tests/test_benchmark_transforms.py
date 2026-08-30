@@ -22,6 +22,36 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "configs/colab.json"
 
 
+def jpeg_header_segments(encoded: bytes) -> list[tuple[int, bytes]]:
+    """Return JPEG segments before entropy-coded image data."""
+
+    if not encoded.startswith(b"\xff\xd8"):
+        raise AssertionError("JPEG stream does not start with SOI")
+    segments: list[tuple[int, bytes]] = []
+    position = 2
+    while position < len(encoded):
+        if encoded[position] != 0xFF:
+            raise AssertionError(f"Expected JPEG marker at offset {position}")
+        while position < len(encoded) and encoded[position] == 0xFF:
+            position += 1
+        marker = encoded[position]
+        position += 1
+        if marker in {0x01, 0xD8, 0xD9} or 0xD0 <= marker <= 0xD7:
+            segments.append((marker, b""))
+            if marker == 0xD9:
+                break
+            continue
+        length = int.from_bytes(encoded[position : position + 2], "big")
+        payload_start = position + 2
+        payload_end = position + length
+        payload = encoded[payload_start:payload_end]
+        segments.append((marker, payload))
+        position = payload_end
+        if marker == 0xDA:
+            break
+    return segments
+
+
 class BenchmarkTransformTests(unittest.TestCase):
     @staticmethod
     def gradient(size: tuple[int, int]) -> Image.Image:
@@ -194,6 +224,61 @@ class BenchmarkTransformTests(unittest.TestCase):
                 "output_format": "JPEG",
             },
         )
+
+    def test_jpeg_strips_metadata_and_is_baseline_four_four_four(self) -> None:
+        source = self.gradient((16, 12))
+        source.info.update(
+            {
+                "exif": b"Exif\x00\x00secret-exif",
+                "icc_profile": b"secret-icc-profile",
+                "comment": b"secret-comment",
+                "xmp": b"<x:xmpmeta>secret-xmp</x:xmpmeta>",
+            }
+        )
+
+        result = apply_benchmark(source, self.by_id["jpeg_q70"], "metadata", 42)
+
+        self.assertIsNotNone(result.encoded_bytes)
+        segments = jpeg_header_segments(result.encoded_bytes or b"")
+        marker_payloads = {marker: payload for marker, payload in segments}
+        metadata_payloads = [
+            payload
+            for marker, payload in segments
+            if marker in {0xE1, 0xE2, 0xFE}
+        ]
+        self.assertFalse(any(b"secret" in payload for payload in metadata_payloads))
+        self.assertNotIn(0xFE, marker_payloads)
+        self.assertFalse(
+            any(payload.startswith(b"Exif\x00\x00") for payload in metadata_payloads)
+        )
+        self.assertFalse(
+            any(payload.startswith(b"ICC_PROFILE\x00") for payload in metadata_payloads)
+        )
+        self.assertFalse(
+            any(b"http://ns.adobe.com/xap/1.0/" in payload for payload in metadata_payloads)
+        )
+
+        start_of_frame_markers = {
+            marker
+            for marker, _ in segments
+            if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+        }
+        self.assertEqual(start_of_frame_markers, {0xC0})
+        baseline_frame = marker_payloads[0xC0]
+        self.assertEqual(baseline_frame[5], 3)
+        self.assertEqual(
+            [baseline_frame[7], baseline_frame[10], baseline_frame[13]],
+            [0x11, 0x11, 0x11],
+        )
+
+    def test_grayscale_input_is_converted_to_rgb_for_benchmark_output(self) -> None:
+        source = Image.new("L", (11, 9), 127)
+
+        result = apply_benchmark(source, self.by_id["blur_sigma_1.0"], "gray", 42)
+
+        self.assertEqual(result.image.mode, "RGB")
+        self.assertEqual(result.image.size, (11, 9))
+        self.assertEqual(result.image.getpixel((4, 3)), (127, 127, 127))
 
     def test_blur_and_alpha_inputs_produce_rgb(self) -> None:
         source = Image.new("RGBA", (9, 7), (10, 20, 30, 128))

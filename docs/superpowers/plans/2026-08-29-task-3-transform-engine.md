@@ -582,12 +582,17 @@ report. Keep all pixel logic in the package.
 
 ```make
 .PHONY: task3-test task3-fixture
+TASK2_SELECTED_MANIFEST ?= $(ARTIFACT_ROOT)/task2/fixed_q96_manifest.csv
+
 task3-test:
-	PYTHONPATH=src python -m unittest tests.test_benchmark_transforms tests.test_transform_materialization tests.test_preprocessing tests.test_controlled_sampler tests.test_safe_transforms -v
+	PYTHONPATH=src python -m unittest tests.test_config tests.test_benchmark_transforms tests.test_transform_materialization tests.test_preprocessing tests.test_controlled_sampler tests.test_safe_transforms -v
 
 task3-fixture:
-	python scripts/materialize_transforms.py --input-manifest $(ARTIFACT_ROOT)/task2/fixed_q96_manifest.csv --output-root $(ARTIFACT_ROOT)/task3/variants --output-manifest $(ARTIFACT_ROOT)/task3/transform_manifest.csv --report $(ARTIFACT_ROOT)/task3/transform_report.json --config configs/colab.json
+	python scripts/materialize_transforms.py --input-manifest $(TASK2_SELECTED_MANIFEST) --output-root $(ARTIFACT_ROOT)/task3/variants --output-manifest $(ARTIFACT_ROOT)/task3/transform_manifest.csv --report $(ARTIFACT_ROOT)/task3/transform_report.json --config configs/colab.json
 ```
+
+The variable defaults to the fixed-Q96 pilot for a practical fixture run and must be overridden
+with the selected Task 2 manifest when that decision is available.
 
 - [ ] **Step 4: Run focused verification**
 

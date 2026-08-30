@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import random
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -31,6 +32,36 @@ class SafeSettings:
     mask_patch_size: int = 16
     mask_max_fraction: float = 0.75
     mask_probability: float = 0.5
+
+    def __post_init__(self) -> None:
+        for name in ("input_size", "mask_patch_size"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise SafePolicyError(f"{name} must be a positive integer")
+
+        for name in (
+            "flip_probability",
+            "color_jitter_fraction",
+            "mask_max_fraction",
+            "mask_probability",
+        ):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or not 0.0 <= value <= 1.0
+            ):
+                raise SafePolicyError(f"{name} must be numeric and between 0.0 and 1.0")
+
+        rotation = self.rotation_degrees
+        if (
+            isinstance(rotation, bool)
+            or not isinstance(rotation, (int, float))
+            or not math.isfinite(float(rotation))
+            or rotation < 0
+        ):
+            raise SafePolicyError("rotation_degrees must be a nonnegative number")
 
 
 def validate_training_policy(config: Mapping[str, Any], *, phase: str) -> str:

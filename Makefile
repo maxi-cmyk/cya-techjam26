@@ -2,6 +2,8 @@
 
 DATA_ROOT ?= /content/hackathon_data
 ARTIFACT_ROOT ?= artifacts
+# Override after Task 2 selects a matched-clean policy; fixed Q96 is the practical fixture default.
+TASK2_SELECTED_MANIFEST ?= $(ARTIFACT_ROOT)/task2/fixed_q96_manifest.csv
 
 install:
 	python -m pip install -r requirements.txt
@@ -25,10 +27,10 @@ test:
 	PYTHONPATH=src python -m unittest discover -s tests -v
 
 task3-test:
-	PYTHONPATH=src python -m unittest tests.test_benchmark_transforms tests.test_transform_materialization tests.test_preprocessing tests.test_controlled_sampler tests.test_safe_transforms -v
+	PYTHONPATH=src python -m unittest tests.test_config tests.test_benchmark_transforms tests.test_transform_materialization tests.test_preprocessing tests.test_controlled_sampler tests.test_safe_transforms -v
 
 task3-fixture:
-	python scripts/materialize_transforms.py --input-manifest $(ARTIFACT_ROOT)/task2/fixed_q96_manifest.csv --output-root $(ARTIFACT_ROOT)/task3/variants --output-manifest $(ARTIFACT_ROOT)/task3/transform_manifest.csv --report $(ARTIFACT_ROOT)/task3/transform_report.json --config configs/colab.json
+	python scripts/materialize_transforms.py --input-manifest $(TASK2_SELECTED_MANIFEST) --output-root $(ARTIFACT_ROOT)/task3/variants --output-manifest $(ARTIFACT_ROOT)/task3/transform_manifest.csv --report $(ARTIFACT_ROOT)/task3/transform_report.json --config configs/colab.json
 
 task2-source-audit:
 	python scripts/build_source_manifest.py --dataset-root $(DATA_ROOT)/raw/sid_set --manifest $(ARTIFACT_ROOT)/task2/source_manifest.csv --report $(ARTIFACT_ROOT)/task2/source_audit.json --expected-csv-rows 20000

@@ -39,6 +39,35 @@ class SafeTransformTests(unittest.TestCase):
             mask_probability=1.0,
         )
 
+    def test_safe_settings_reject_invalid_numeric_values_at_construction(self) -> None:
+        invalid_values = (
+            ("input_size", 0),
+            ("input_size", True),
+            ("input_size", 32.5),
+            ("mask_patch_size", 0),
+            ("mask_patch_size", True),
+            ("mask_patch_size", 8.5),
+            ("flip_probability", -0.1),
+            ("flip_probability", 1.1),
+            ("flip_probability", True),
+            ("color_jitter_fraction", -0.1),
+            ("color_jitter_fraction", 1.1),
+            ("color_jitter_fraction", True),
+            ("mask_max_fraction", -0.1),
+            ("mask_max_fraction", 1.1),
+            ("mask_max_fraction", True),
+            ("mask_probability", -0.1),
+            ("mask_probability", 1.1),
+            ("mask_probability", True),
+            ("rotation_degrees", -0.1),
+            ("rotation_degrees", True),
+            ("rotation_degrees", float("inf")),
+        )
+
+        for field, value in invalid_values:
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                SafeSettings(**{field: value})
+
     def test_safe_requires_seed_train_phase_exactly(self) -> None:
         for phase in ("selection_val", "final_test", "train", "seed_train "):
             with self.subTest(phase=phase), self.assertRaisesRegex(

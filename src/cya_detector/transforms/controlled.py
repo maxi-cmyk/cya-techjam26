@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import random
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import TypeVar
 
 from PIL import Image
 
@@ -18,6 +20,25 @@ from cya_detector.transforms.preprocessing import random_crop_input
 
 LABELS = ("authentic", "ai_generated")
 CLEAN_CELL_ID = "clean"
+EXPECTED_CONTROLLED_CELL_IDS = frozenset(
+    {
+        "jpeg_q90",
+        "jpeg_q70",
+        "jpeg_q50",
+        "jpeg_q30",
+        "blur_sigma_0.5",
+        "blur_sigma_1.0",
+        "blur_sigma_2.0",
+        "resize_scale_0.5",
+        "resize_scale_0.25",
+        "noise_sigma_0.02",
+        "noise_sigma_0.05",
+        "noise_sigma_0.1",
+        "color_jitter_0.2",
+        "center_crop_0.8",
+    }
+)
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -67,17 +88,80 @@ def _validated_cells(cells: Sequence[TransformCell]) -> list[TransformCell]:
             raise ValueError(f"Duplicate transform cell_id: {cell.cell_id!r}")
         seen.add(cell.cell_id)
         validated.append(cell)
+    missing = sorted(EXPECTED_CONTROLLED_CELL_IDS - seen)
+    extra = sorted(seen - EXPECTED_CONTROLLED_CELL_IDS)
+    if missing or extra:
+        details = []
+        if missing:
+            details.append(f"missing={missing!r}")
+        if extra:
+            details.append(f"extra={extra!r}")
+        raise ValueError(
+            "Controlled training requires exactly the configured transform cell IDs: "
+            + ", ".join(details)
+        )
     return validated
 
 
 def _shuffled(
-    values: Sequence[Mapping[str, str]] | Sequence[TransformCell],
+    values: Sequence[T],
     *,
     seed: int,
-) -> list[Mapping[str, str]] | list[TransformCell]:
+) -> list[T]:
     shuffled = list(values)
     random.Random(seed).shuffle(shuffled)
     return shuffled
+
+
+def _balanced_cell_pools(
+    cells: Sequence[TransformCell],
+    *,
+    transformed_per_label: Mapping[str, int],
+    project_seed: int,
+    epoch_key: str,
+) -> dict[str, list[TransformCell]]:
+    total_transformed = sum(transformed_per_label.values())
+    quota_order = _shuffled(
+        sorted(cells, key=lambda cell: cell.cell_id),
+        seed=derive_seed(project_seed, epoch_key, "cells:global-quotas"),
+    )
+    quota, remainder = divmod(total_transformed, len(quota_order))
+    global_quotas = {
+        cell.cell_id: quota + (position < remainder)
+        for position, cell in enumerate(quota_order)
+    }
+
+    cells_by_id = {cell.cell_id: cell for cell in cells}
+    label_counts = {label: Counter[str]() for label in LABELS}
+    odd_cells: list[str] = []
+    for cell in quota_order:
+        cell_quota = global_quotas[cell.cell_id]
+        shared = cell_quota // len(LABELS)
+        for label in LABELS:
+            label_counts[label][cell.cell_id] = shared
+        if cell_quota % len(LABELS):
+            odd_cells.append(cell.cell_id)
+
+    first_label = LABELS[0]
+    first_label_needed = transformed_per_label[first_label] - sum(
+        label_counts[first_label].values()
+    )
+    for position, cell_id in enumerate(odd_cells):
+        label = first_label if position < first_label_needed else LABELS[1]
+        label_counts[label][cell_id] += 1
+
+    pools: dict[str, list[TransformCell]] = {}
+    for label in LABELS:
+        pool = [
+            cells_by_id[cell.cell_id]
+            for cell in quota_order
+            for _ in range(label_counts[label][cell.cell_id])
+        ]
+        pools[label] = _shuffled(
+            pool,
+            seed=derive_seed(project_seed, epoch_key, f"cells:{label}:assignment"),
+        )
+    return pools
 
 
 def build_controlled_epoch(
@@ -102,13 +186,17 @@ def build_controlled_epoch(
             sorted(parent_pools[label], key=lambda row: (row["sample_id"], row["image_path"])),
             seed=derive_seed(project_seed, epoch_key, f"parents:{label}"),
         )
-    cell_pools = {
-        label: _shuffled(
-            sorted(transform_cells, key=lambda cell: cell.cell_id),
-            seed=derive_seed(project_seed, epoch_key, f"cells:{label}"),
-        )
-        for label in LABELS
-    }
+    transformed_per_label = Counter(
+        LABELS[slot % len(LABELS)]
+        for slot in range(epoch_size)
+        if slot % 4 not in (0, 3)
+    )
+    cell_pools = _balanced_cell_pools(
+        transform_cells,
+        transformed_per_label=transformed_per_label,
+        project_seed=project_seed,
+        epoch_key=epoch_key,
+    )
 
     parent_positions = {label: 0 for label in LABELS}
     cell_positions = {label: 0 for label in LABELS}
@@ -124,7 +212,7 @@ def build_controlled_epoch(
             cell_id = CLEAN_CELL_ID
         else:
             label_cells = cell_pools[label]
-            cell_id = label_cells[cell_positions[label] % len(label_cells)].cell_id
+            cell_id = label_cells[cell_positions[label]].cell_id
             cell_positions[label] += 1
 
         sample_id = parent["sample_id"]

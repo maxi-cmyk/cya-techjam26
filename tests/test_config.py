@@ -7,7 +7,6 @@ from pathlib import Path
 from cya_detector.config import ConfigError, load_config, validate_config
 from cya_detector.data.manifest import MANIFEST_FIELDS
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "configs/colab.json"
 
@@ -88,6 +87,70 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(policy=policy_name):
                 candidate = copy.deepcopy(self.config)
                 candidate["training_policy"][policy_name]["enabled"] = "true"
+                with self.assertRaises(ConfigError):
+                    validate_config(candidate)
+
+    def test_task3_sections_reject_unknown_keys(self) -> None:
+        section_paths = (
+            ("benchmark_transforms",),
+            ("transform_engine",),
+            ("training_policy",),
+            ("training_policy", "controlled"),
+            ("training_policy", "safe"),
+        )
+        for path in section_paths:
+            with self.subTest(path=path):
+                candidate = copy.deepcopy(self.config)
+                section = candidate
+                for key in path:
+                    section = section[key]
+                section["unexpected_key"] = "not allowed"
+                with self.assertRaisesRegex(ConfigError, "Unknown.*key"):
+                    validate_config(candidate)
+
+    def test_task3_sections_reject_missing_keys(self) -> None:
+        required_fields = (
+            (("benchmark_transforms",), "allow_chaining"),
+            (("transform_engine",), "padding"),
+            (("training_policy",), "controlled"),
+            (("training_policy", "controlled"), "clean_fraction"),
+            (("training_policy", "safe"), "mask_probability"),
+        )
+        for path, field in required_fields:
+            with self.subTest(path=path, field=field):
+                candidate = copy.deepcopy(self.config)
+                section = candidate
+                for key in path:
+                    section = section[key]
+                del section[field]
+                with self.assertRaisesRegex(ConfigError, "Missing.*key"):
+                    validate_config(candidate)
+
+    def test_safe_requires_rotation_and_mask_patch_size(self) -> None:
+        for field in ("rotation_degrees", "mask_patch_size"):
+            with self.subTest(field=field):
+                candidate = copy.deepcopy(self.config)
+                del candidate["training_policy"]["safe"][field]
+                with self.assertRaisesRegex(ConfigError, "Missing.*key"):
+                    validate_config(candidate)
+
+    def test_task3_numeric_fields_reject_booleans_and_invalid_ranges(self) -> None:
+        invalid_values = (
+            (("training_policy", "controlled", "clean_fraction"), True),
+            (("training_policy", "safe", "horizontal_flip_probability"), True),
+            (("training_policy", "safe", "mask_max_fraction"), True),
+            (("training_policy", "safe", "rotation_degrees"), True),
+            (("training_policy", "safe", "rotation_degrees"), -1.0),
+            (("training_policy", "safe", "mask_patch_size"), True),
+            (("training_policy", "safe", "mask_patch_size"), 0),
+        )
+        for path, value in invalid_values:
+            with self.subTest(path=path, value=value):
+                candidate = copy.deepcopy(self.config)
+                section = candidate
+                for key in path[:-1]:
+                    section = section[key]
+                section[path[-1]] = value
                 with self.assertRaises(ConfigError):
                     validate_config(candidate)
 
