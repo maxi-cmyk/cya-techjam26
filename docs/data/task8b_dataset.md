@@ -235,6 +235,54 @@ the existing single-image proxy reaches AUC 0.543. Both miss the predeclared
 0.60 gate. CA coverage is zero. The final decision is therefore no physical
 feature retained and no fusion training.
 
+### Bounded PRNU v2 follow-up
+
+The original evidence above remains immutable. A separately versioned follow-up
+tests whether a stronger estimator can recover repeatable device signal from the
+same licensed PREMIER source rows. It writes only to `artifacts/task8b_v2` and
+does not overwrite `artifacts/task8b`.
+
+The predeclared v2 protocol uses:
+
+- 25 disjoint reference images per eligible seed-training device, leaving every
+  remaining image from that device as a query;
+- a fixed 512 px centre crop in encoded sensor coordinates, with no resize and
+  no EXIF orientation transform;
+- BayesShrink `db2` wavelet residual extraction, row/column zero-meaning, and
+  adaptive Fourier-domain spectral cleanup;
+- dark, saturated, and highest-gradient pixel masking;
+- multiplicative reference estimation and PCE comparison with at most eight
+  pixels of translational registration; and
+- the unchanged AUC 0.60 gate, plus same-device mean PCE above different-device
+  mean PCE and top-1 device accuracy above random.
+
+The experiment assumes that encoded pixel coordinates are stable within each
+PREMIER device ID and that the files retain enough native sensor signal for a
+512 px crop. It uses device identity only, does not read binary authenticity
+labels, does not read selection or held-out splits, and cannot establish camera
+authentication. Passing the device-signal gate would permit a later locked
+binary usefulness ablation; it would not automatically retain PRNU for fusion.
+
+The verified local run includes all ten eligible devices, 250 reference images,
+166 disjoint queries, and 1,660 comparisons. It reaches AUC 0.9171 and top-1
+device accuracy 0.8554 versus 0.10 random. Mean same-device PCE is 262.65 versus
+11.31 for different-device comparisons, so all three predeclared device-signal
+conditions pass. No authentic/AI labels, selection/held-out rows, or binary
+fusion training were used. The next permissible step is a separately locked
+binary usefulness ablation, not automatic feature retention.
+
+Run it after the original Task 8B manifest exists:
+
+```bash
+make task8b-v2-prnu-validate
+```
+
+The report is written to
+`artifacts/task8b_v2/audits/prnu_v2_signal_validation.json`; per-device
+fingerprints are written below `artifacts/task8b_v2/fingerprints`. The notebook
+syncs that complete directory into a sibling `task8b_v2` folder under the same
+Google Drive artifact root.
+
 ## Split and leakage contract
 
 - Authentic rows group by complete physical device ID. Variable EXIF model
@@ -275,6 +323,7 @@ make task8b-prnu-references
 make task8b-matched
 make task8b-prnu-validate
 make task8b-decision
+make task8b-v2-prnu-validate
 ```
 
 `task8b-prepare` builds the split manifest and requires the source-readiness audit

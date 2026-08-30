@@ -46,8 +46,11 @@ AI-only files into Colab-local storage. The preparation cell validates all 1,280
 the notebook creates the reviewed inventory and builds the
 device/generator-grouped manifest, builds the 256 px matched TIFF view, runs the
 source and matched nuisance gates, compares single-image and multi-image PRNU
-without binary labels, records the retain/reject decision, and syncs reports to
-an `artifacts/task8b` Drive folder without requiring a mounted Drive. Durable
+without binary labels, records the retain/reject decision, then runs the bounded
+native-coordinate PRNU v2 estimator. Original evidence is synced to
+`artifacts/task8b`; v2 reports and fingerprints are synced to the sibling
+`artifacts/task8b_v2` folder under the same Drive root. Neither upload requires
+a mounted Drive. Durable
 audits, manifests, fingerprints, reports, features, and checkpoints are synced;
 the reproducible matched-view image cache remains local. It stops before model
 fitting whenever source, nuisance, or physical-estimator validation fails. The

@@ -49,4 +49,8 @@ The completed local Task 8B pilot normalizes 1,164 eligible rows to identical
 256 px uncompressed TIFF views and passes the nuisance gate at 0.50 balanced
 accuracy. PRNU fails its independent device-signal gate (AUC 0.538; minimum
 0.60), CA lacks calibration coverage, and the recorded outcome is no physical
-feature retained and no RINE fusion training.
+feature retained and no RINE fusion training. A bounded PRNU v2 estimator is
+available as `make task8b-v2-prnu-validate`; its label-free device test reaches
+AUC 0.917 and top-1 accuracy 0.855 versus 0.10 random. It preserves the original
+decision and writes separate evidence only under `artifacts/task8b_v2`; binary
+fusion remains pending a locked usefulness ablation.

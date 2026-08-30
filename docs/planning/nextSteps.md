@@ -59,7 +59,9 @@ Every notebook remains a thin launcher for versioned modules in `src/`. A runtim
 | 5. Evaluation harness | Clean milestone complete | Final-test lock and 50/50 formula implemented | Populate robustness tables from Task 3 |
 | 6. RINE Stage B | Clean milestone complete | Provisionally retain, 99.39% clean | Confirm with Task 3 and class-regression gates |
 | 7. Frequency Stage 1 | Clean milestone complete | Retain magnitude/residual at 83.03%; drop phase; early exit remains disabled | Robustness and incremental fusion after Task 3 |
-| 8. Color/physical auxiliaries | Current matched-data milestone complete | Lab wins the color-only ablation at 82.42%; PRNU/CA not eligible on matched-Q96 | Color robustness/fusion after Task 3; Task 8B revisits physical families with native data |
+| 8. Color/physical auxiliaries | Current matched-data milestone complete | Lab wins the color-only ablation at 82.42%; PRNU/CA not eligible on matched-Q96 | Color robustness/fusion after Task 3; physical families are governed by the closed Task 8B pilot |
+| 8B. Native physical pilot | Complete; no physical feature retained | Matched nuisance B.Acc. 0.50 passed, but multi-image PRNU AUC 0.538 and single-image proxy AUC 0.543 both missed the 0.60 gate; CA coverage was zero | No binary physical fusion run; reopen only with materially better native device/lens evidence |
+| 8B-v2. Improved PRNU estimator | Device-signal gate passed; binary usefulness pending | AUC 0.917; top-1 0.855 vs 0.10 random; same-device mean PCE 262.65 vs 11.31 different-device | Preserve `artifacts/task8b_v2`; design a locked binary usefulness ablation before any fusion retention |
 | 9. Texture path | Patch selector complete | Deterministic top-k non-overlapping Laplacian/Sobel selection passes fixtures | Implement global+patch encoding and benchmark cost |
 | 10. Packaging | Not started | Final-test remains sealed | Wait for Tasks 3, 6-9 retention decisions |
 
@@ -67,7 +69,7 @@ The critical path is now Task 3. Task 9 model integration can proceed in paralle
 
 ## Evidence-based model decisions
 
-All accuracy values below are clean `selection_val` results. They are useful for pruning experiments, but they are not the final challenge score until Task 3 supplies the independent robustness cells.
+Classifier accuracy values below are clean `selection_val` results. They are useful for pruning experiments, but they are not the final challenge score until Task 3 supplies the independent robustness cells. Task 8B PRNU values are label-free device-separation AUCs, not authentic-versus-AI accuracy.
 
 | Component | Clean result | Confidence or failure evidence | Action |
 |---|---:|---|---|
@@ -78,11 +80,13 @@ All accuracy values below are clean `selection_val` results. They are useful for
 | Lab correlation | **82.42%** | Approximately 99-100% extractor confidence and 100% validity across both labels | Keep as the color-family fusion candidate and train with matched color-jitter distributions |
 | RGB+Lab correlation | 78.79% | Adding RGB reduced Lab-only accuracy by 3.64 points | Drop this fixed concatenation; only revisit if a later learned projection proves incremental value |
 | RGB correlation | 55.15% | Nearly chance despite approximately 99-100% confidence and 100% validity | Drop the current representation; low-priority redesign only |
-| PRNU coherence | Not trained | Extractor produced values with high internal confidence, but native physical eligibility was 0% for both labels | Prioritize in Task 8B with native multi-image camera data; do not treat extractor confidence as authenticity confidence |
-| Chromatic aberration | Not trained | Native eligibility 0%; only about 24-28% extractor validity and roughly 0.9-1.7% mean confidence | Revisit after PRNU in Task 8B using native camera/lens data and calibrated edge support |
+| Native multi-image PRNU reference | **AUC 0.538** | 10 training devices, 100 disjoint reference images, 316 device-identity queries, 3,160 comparisons; same-device mean correlation 0.00266 versus 0.00166 across devices; below the predeclared 0.60 AUC gate | Reject for this pilot; do not train a binary projection/fusion head and do not claim camera authentication |
+| Single-image PRNU coherence proxy | **AUC 0.543** | Device-separation validation used no authentic/AI labels; top-1 device accuracy 0.155 versus 0.10 random; still below the same 0.60 gate | Reject for this pilot; revisit only with a materially improved estimator and new held-out-device evidence |
+| Native multi-image PRNU v2 | **AUC 0.917** | 10 devices, 250 disjoint reference images, 166 queries, and 1,660 PCE comparisons; top-1 0.855 versus 0.10 random; same-device mean PCE 262.65 versus 11.31 different-device | Device signal validated; do not claim binary value or retain for fusion until a separately locked authentic/AI ablation passes |
+| Chromatic aberration | Gate not eligible | Task 8B lens/focal metadata fraction 0.0 and edge-rich fraction 0.0; corrected/uncorrected calibration coverage is absent | Keep deferred; collect calibrated native lens/focal and edge-rich coverage before estimator validation or binary fitting |
 | Radial distortion | Not run | Insufficient eligible line/arc support | Keep deferred |
 
-High extractor confidence means the statistic was numerically measurable; it does **not** mean the classifier is correct. RGB is the clearest example: excellent coverage and confidence but only 55.15% clean accuracy. PRNU is more severe: its internal coherence calculation succeeds, but the recompressed view makes the physical interpretation ineligible.
+High extractor confidence means the statistic was numerically measurable; it does **not** mean the classifier is correct. RGB is the clearest example: excellent coverage and confidence but only 55.15% clean accuracy. Task 8B v1 also confirms that eligible native data alone is insufficient: both original PRNU estimators failed their independent device-separation gate. V2 now demonstrates repeatable device signal, but that is still not evidence that it improves authentic-versus-AI classification.
 
 ### Required retraining and fusion matrix
 
@@ -94,11 +98,11 @@ Run these only after Task 3 is merged:
 4. RINE plus magnitude/residual frequency plus Lab, but only if both individual additions pass the 50/50 and per-class gates.
 5. Global RINE plus the Task 9 texture aggregator under a fixed patch budget, including latency and resize robustness.
 
-Do not spend another training run on phase, the current RGB-only vector, RGB+Lab fixed concatenation, PRNU, chromatic aberration, radial distortion, or full-backbone CLIP fine-tuning **on the current matched-Q96 handoff**. PRNU and optics remain planned experiments, but their next step is better data rather than more fitting. Full CLIP fine-tuning remains optional until the frozen pipeline is complete.
+Do not spend another training run on phase, the current RGB-only vector, RGB+Lab fixed concatenation, chromatic aberration, radial distortion, or full-backbone CLIP fine-tuning **on the current matched-Q96 handoff**. Task 8B v1 remains closed. PRNU v2 passed its independent device-signal gate, but it may enter only a separately predeclared binary usefulness ablation—not fusion retention—after Task 3 establishes the locked robustness evaluation. Full CLIP fine-tuning remains optional until the frozen pipeline is complete.
 
 ### Completed native physical-signal pilot
 
-Task 8B is a separate evidence track, not a reason to block Task 3 or the viable RINE package. Prioritize PRNU first and chromatic aberration second.
+Task 8B is a completed separate evidence track, not a reason to block Task 3 or the viable RINE package. Its current decision is fail-closed: retain no physical feature and schedule no physical fusion run.
 
 The repository contract now selects the accessible PREMIER v3 N1/N2 subsets for
 the authentic side; N3 remains optional because it is described on the project
@@ -130,6 +134,25 @@ because lens/focal and edge-rich calibration coverage are absent. Task 8B is
 therefore closed for this licensed pilot with no physical feature retained, no
 fusion training, and no camera-authentication claim.
 
+The decision authority is the generated evidence set under `artifacts/task8b`:
+`audits/readiness_report.json`, `audits/matched_readiness_report.json`,
+`audits/prnu_signal_validation.json`, and
+`reports/retention_decision.json`. Preserve these together because the final
+report hashes the readiness and PRNU inputs used to authorize the fail-closed
+decision.
+
+The bounded PRNU v2 follow-up is isolated under `artifacts/task8b_v2`. Its
+implementation changes the estimator, not the evidence threshold: 25 disjoint
+references per eligible device, a native-coordinate 512 px crop without resize
+or EXIF transposition, wavelet plus spectral cleanup, multiplicative reference
+estimation, masked pixels, and PCE with an eight-pixel registration window. The
+assumption is that encoded pixel coordinates remain stable within a PREMIER
+device ID. The verified run reads only `seed_train` PREMIER device identities
+and passes the unchanged gates: AUC 0.9171, top-1 accuracy 0.8554 versus 0.10
+random, and mean same-device PCE 262.65 versus 11.31 across devices. This
+validates repeatable device signal only; no binary fusion is authorized until a
+separately locked usefulness ablation passes.
+
 - Authentic data must contain native or minimally processed camera images, camera/device identifiers, multiple images per physical sensor, and enough distinct devices to hold out entire sensors during validation.
 - The synthetic side must span diverse generator families and checkpoints. Resolution, codec, quality, and other export settings must be matched independently of label so the fusion head cannot learn file-pipeline shortcuts.
 - Preserve immutable native originals. Keep source-original physical-feature experiments separate from matched derivatives and from independently transformed robustness views.
@@ -151,8 +174,8 @@ Tasks are ordered by integration dependency, but implementation does not have to
 | Task 5 evaluation harness | Now, using fixtures | Real tables wait for Tasks 2–4 | Tasks 2, 3, 4, and feature extraction | `src/cya_detector/evaluation/`, reporting tests |
 | Task 7 frequency extraction | Now, using fixtures | Fusion/retention waits for Tasks 4 and 5 | Tasks 2, 3, 5, 8, and 9 | `src/cya_detector/features/frequency.py` |
 | Task 8 color features | Now, using fixtures | Fusion/retention waits for Tasks 4 and 5 | Frequency, PRNU, optics, and texture tracks | `src/cya_detector/features/color.py` |
-| Task 8 PRNU features | Now, using fixtures | Physical claims wait for Task 2 native-data audit | Frequency, color, optics, and texture tracks | `src/cya_detector/features/prnu.py` |
-| Task 8 optical features | Now, using fixtures | Physical claims wait for Task 2 eligibility audit | Frequency, color, PRNU, and texture tracks | `src/cya_detector/features/optics.py` |
+| Task 8 PRNU features | V1 closed; v2 device signal validated | Binary usefulness and fusion retention wait for a predeclared robustness ablation after Task 3 | Frequency, color, optics, and texture tracks | `src/cya_detector/features/prnu_reference_v2.py` |
+| Task 8 optical features | Deferred after Task 8B | Reopen only after lens/focal metadata and calibrated edge-rich corrected/uncorrected coverage pass readiness | Frequency, color, PRNU, and texture tracks | `src/cya_detector/features/optics.py` |
 | Task 9 patch selector | Now, using fixtures | Learned aggregation waits for Task 4 | Tasks 2, 3, 5, 7, and 8 | `src/cya_detector/features/texture.py` |
 | Task 6 RINE integration | After Stage A runs | Tasks 4 and 5 | Later auxiliary fusion experiments | `src/cya_detector/models/rine.py` |
 | Task 10 packaging | After feature retention | Selected outputs from Tasks 4–9 | Documentation/demo preparation only | inference CLI, calibration, release tests |
@@ -165,7 +188,7 @@ Safe work available immediately while Task 3 finishes: Task 9 global-plus-patch 
 2. **Materialize the selection robustness views.** Produce every JPEG, blur, resize, noise, color-jitter, and crop parameter cell directly from fixed-Q96 `matched_clean`, never from another transformed image.
 3. **Populate the locked evaluation.** Score Stage A and RINE on clean plus every Task 3 cell, then compute R.Acc., F.Acc., per-cell accuracy, confusion matrices, calibration diagnostics, robustness mean, and the 50% clean / 50% robustness score.
 4. **Re-test retained auxiliary candidates.** Use magnitude/residual for frequency and Lab for color. Keep phase dropped. Evaluate CLIP/RINE-only, each feature-only diagnostic, and incremental RINE+frequency, RINE+Lab, and RINE+frequency+Lab fusion across seeds 42/43/44.
-5. **Prepare Task 8B without training on the current handoff.** The current matched-Q96 rows have zero native eligibility for PRNU and chromatic aberration. Acquire and audit the native camera/lens dataset above, then run PRNU first and chromatic aberration second as separate ablations. Keep radial distortion deferred until line/arc coverage is demonstrated.
+5. **Preserve Task 8B v1 and scope the v2 binary ablation.** Keep the v1 manifests, audit hashes, validation, and fail-closed report unchanged. V2 passes its label-free device gate, so predeclare a reference-free/runtime-compatible binary feature and compare RINE-only, PRNU-only diagnostic, and RINE+PRNU on clean plus every Task 3 transform before fitting or retaining fusion weights. Chromatic aberration remains deferred until calibrated lens/focal and edge-rich corrected/uncorrected coverage passes readiness; radial distortion remains deferred until line/arc coverage is demonstrated.
 6. **Complete Task 9 in parallel.** Preserve the global CLIP view, encode a fixed patch budget, train only the aggregator/fusion head, and compare global-only, local-only, and combined accuracy plus latency. Resize 0.5x/0.25x results wait for Task 3.
 7. **Freeze and package only after those gates.** Select the architecture by the locked 50/50 score and per-class regression limits, fit temperature once on clean `selection_val`, implement the directory JSON contract, and then run sealed `final_test` once.
 
@@ -291,14 +314,17 @@ The verified CPU run extracted 67 features for 1,390 rows and completed all nine
   - [x] Add a fail-closed inventory importer, license/provenance fields, Task 8B-only grouped splits, existing-root storage configuration, and training-only PRNU reference construction.
   - [x] Add separate source, PRNU-reference, chromatic-aberration metadata, and nuisance/training readiness gates plus a thin Colab staging-and-audit launcher.
   - [x] Add a local-first extracted-file scanner that balances classes and generator families, excludes GenImage nature rows, and creates a draft inventory without overwriting review work.
-  - [x] Acquire 644 native/minimally processed PREMIER N1/N2 images across 13 device IDs with multiple images per sensor and verified CC BY-SA 4.0 permission.
+  - [x] Acquire 644 native/minimally processed PREMIER N1/N2 files, inventory 640 balanced licensed rows across 13 device IDs, and preserve multiple images per sensor under verified CC BY-SA 4.0 permission.
   - [x] Add four diverse fully synthetic families and materialize label-independent 256 px crop-only, metadata-stripped, uncompressed TIFF views; keep BigGAN stress-only.
   - [x] Freeze grouped splits that hold out complete authentic devices and synthetic generator families without overlap.
   - [x] Run source-original and matched-view nuisance audits before fitting any physical fusion head; matched balanced accuracy is 0.50.
-  - [x] Compare single-image coherence with disjoint-reference multi-image fingerprints using device identity only; neither meets the 0.60 AUC gate.
+  - [x] Compare single-image coherence (AUC 0.543) with disjoint-reference multi-image fingerprints (AUC 0.538) using device identity only; neither meets the 0.60 AUC gate.
   - [x] Apply the chromatic-aberration readiness gate; validation is correctly skipped because calibrated lens/focal/edge-rich coverage is zero.
   - [x] Apply the frozen-RINE fusion gate; no projection or fusion weights are trained because no physical estimator independently validated.
   - [x] Record the fail-closed decision and hashes in `artifacts/task8b/reports/retention_decision.json`; downstream binary/robustness evaluation is not run without a candidate.
+  - [x] Implement the isolated PRNU v2 protocol and Colab/Drive routing under `artifacts/task8b_v2` without changing the original Task 8B evidence.
+  - [x] Run PRNU v2 on the licensed PREMIER source package: AUC 0.9171, top-1 0.8554 versus 0.10 random, and same/different mean PCE 262.65/11.31; binary labels and fusion remain unused.
+  - [ ] Predeclare a runtime-compatible PRNU v2 binary usefulness ablation after Task 3; passing device separation alone does not authorize retention.
   - [x] Retain no Task 8B physical feature and make no camera or lens authenticity claim.
 
 [ ] **Task 9 — Add the texture-aware local-detail path under a fixed budget**

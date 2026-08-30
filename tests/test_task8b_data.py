@@ -9,6 +9,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 from cya_detector.data.manifest import DatasetContractError, write_manifest
@@ -25,6 +26,11 @@ from cya_detector.data.task8b_prepare import (
     prepare_task8b_inventory,
 )
 from cya_detector.features.prnu_reference import build_training_prnu_references
+from cya_detector.features.prnu_reference_v2 import (
+    _native_luminance_crop,
+    _pce_score,
+    validate_prnu_device_signal_v2,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -399,6 +405,82 @@ class Task8BDatasetTests(unittest.TestCase):
         self.assertEqual(report["reference_count"], 1)
         self.assertEqual(report["references"][0]["image_count"], 2)
         self.assertFalse(report["selection_or_heldout_rows_read"])
+
+    def test_prnu_v2_native_crop_does_not_resize_or_apply_exif_orientation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "oriented.png"
+            image = Image.new("RGB", (160, 120), (0, 0, 0))
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((48, 28, 111, 91), fill=(255, 255, 255))
+            image.save(path)
+
+            luminance = _native_luminance_crop(path, 64)
+
+        self.assertEqual(luminance.shape, (64, 64))
+        self.assertGreater(float(luminance.mean()), 0.95)
+
+    def test_prnu_v2_pce_rewards_aligned_signal_with_small_shift(self) -> None:
+        random = np.random.default_rng(42)
+        expected = random.normal(size=(64, 64)).astype("float32")
+        shifted = np.roll(expected, shift=(2, -3), axis=(0, 1))
+        mask = np.ones((64, 64), dtype=bool)
+
+        same_score = _pce_score(shifted, expected, mask, maximum_shift=4)
+        different_score = _pce_score(
+            random.normal(size=(64, 64)).astype("float32"),
+            expected,
+            mask,
+            maximum_shift=4,
+        )
+
+        self.assertGreater(same_score, different_score)
+
+    def test_prnu_v2_writes_only_to_requested_artifact_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = []
+            random = np.random.default_rng(7)
+            for device_index, device in enumerate(("camera-a", "camera-b")):
+                device_pattern = random.normal(0.0, 3.0, size=(128, 128, 1))
+                for image_index in range(3):
+                    path = root / f"{device}-{image_index}.png"
+                    scene = random.uniform(40, 210, size=(128, 128, 3))
+                    Image.fromarray(np.clip(scene + device_pattern, 0, 255).astype("uint8")).save(
+                        path
+                    )
+                    rows.append(
+                        {
+                            "sample_id": f"{device}-{image_index}",
+                            "source_id": f"{device}-{image_index}",
+                            "image_path": str(path),
+                            "sha256": str(device_index * 10 + image_index),
+                            "label": "authentic",
+                            "split": "seed_train",
+                            "dataset_name": "premier",
+                            "eligible_for_split": "true",
+                            "license_verified": "true",
+                            "physical_source_status": "native_camera",
+                            "device_id": device,
+                        }
+                    )
+            manifest = root / "manifest.csv"
+            write_manifest(manifest, rows)
+            artifact_root = root / "artifacts/task8b_v2"
+
+            report = validate_prnu_device_signal_v2(
+                manifest_path=manifest,
+                artifact_root=artifact_root,
+                reference_images_per_device=2,
+                crop_size=128,
+                wavelet_levels=2,
+                maximum_shift=2,
+            )
+
+            self.assertTrue((artifact_root / "audits/prnu_v2_signal_validation.json").is_file())
+            self.assertEqual(len(list((artifact_root / "fingerprints").glob("*.npz"))), 2)
+            self.assertFalse(report["binary_authenticity_labels_used"])
+            self.assertFalse(report["selection_or_heldout_rows_read"])
+            self.assertFalse(report["fusion_training_run"])
 
     def test_manifest_cli_writes_under_requested_artifact_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

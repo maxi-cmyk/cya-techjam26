@@ -1,4 +1,4 @@
-.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare task8b-extract-genimage task8b-inventory task8b-manifest task8b-readiness task8b-matched task8b-prepare task8b-prnu-references task8b-prnu-validate task8b-decision
+.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare task8b-extract-genimage task8b-inventory task8b-manifest task8b-readiness task8b-matched task8b-prepare task8b-prnu-references task8b-prnu-validate task8b-decision task8b-v2-prnu-validate
 
 DATA_ROOT ?= /content/hackathon_data
 ARTIFACT_ROOT ?= artifacts
@@ -100,6 +100,7 @@ task8-compare:
 
 TASK8B_DATA_ROOT ?= $(DATA_ROOT)/raw/task8b
 TASK8B_ARTIFACT_ROOT ?= $(ARTIFACT_ROOT)/task8b
+TASK8B_V2_ARTIFACT_ROOT ?= $(ARTIFACT_ROOT)/task8b_v2
 TASK8B_MANIFEST ?= $(TASK8B_ARTIFACT_ROOT)/manifests/source_manifest_split.csv
 GENIMAGE_ARCHIVE ?=
 GENIMAGE_GENERATOR ?=
@@ -128,6 +129,9 @@ task8b-prnu-references: task8b-readiness
 
 task8b-prnu-validate:
 	python scripts/validate_task8b_prnu.py --manifest $(TASK8B_MANIFEST) --output $(TASK8B_ARTIFACT_ROOT)/audits/prnu_signal_validation.json
+
+task8b-v2-prnu-validate:
+	python scripts/validate_task8b_prnu_v2.py --manifest $(TASK8B_MANIFEST) --artifact-root $(TASK8B_V2_ARTIFACT_ROOT) --reference-images-per-device 25 --crop-size 512 --wavelet db2 --wavelet-levels 4 --edge-keep-quantile 0.75 --maximum-shift 8 --minimum-auc 0.60
 
 task8b-decision:
 	python scripts/decide_task8b.py --matched-readiness $(TASK8B_ARTIFACT_ROOT)/audits/matched_readiness_report.json --prnu-validation $(TASK8B_ARTIFACT_ROOT)/audits/prnu_signal_validation.json --output $(TASK8B_ARTIFACT_ROOT)/reports/retention_decision.json

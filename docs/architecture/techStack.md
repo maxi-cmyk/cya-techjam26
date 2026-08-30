@@ -73,7 +73,7 @@ The binary head is the only classification head. Face-, edit-, and mixed-content
 - **Signal:** photo-response non-uniformity, modeled as a weak multiplicative sensor pattern in the denoising residual.
 - **Candidate implementation:** wavelet or established PRNU-style denoising, residual extraction, block-wise NumPy/scikit-image analysis, and normalized feature fusion in PyTorch.
 - **Features:** residual variance/energy, local luminance-to-residual coupling, cross-patch self-consistency, and CFA/sensor-periodicity statistics.
-- **Boundary:** this is a single-image coherence proxy. Classical normalized correlation against a camera fingerprint is unavailable because the source device and reference image set are unknown.
+- **Runtime boundary:** the deployed feature remains a single-image coherence proxy because an unknown input has no known source device or reference set. Task 8B-v2 separately validates repeatable device signal using 25 known-device references, native-coordinate 512 px crops, wavelet/spectral residual cleanup, multiplicative fingerprints, and PCE; its AUC 0.917 device result does not itself establish binary usefulness.
 - **Decision rule:** no direct decision rule. The feature vector is learned jointly with CLIP features, and missing/weak PRNU never independently triggers a synthetic verdict.
 - **Robustness expectation:** crop should preserve the signal best; JPEG, blur, resize, and Gaussian noise are expected to weaken it substantially. Each claim must be checked in the independent transformation table.
 - **Ablation gate:** retain PRNU fusion only if it improves the locked 50/50 score or a pre-agreed class-specific robustness measure without causing unacceptable regression.
