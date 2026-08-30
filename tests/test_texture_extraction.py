@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 import uuid
 from pathlib import Path
@@ -35,11 +36,14 @@ class _Encoder:
         return SimpleNamespace(image_embeds=embeds, hidden_states=states)
 
 
-def _example(path: Path, *, sample_id: str, split: str = "seed_train", sha256: str = "sha") -> ManifestExample:
+def _example(
+    path: Path, *, sample_id: str, split: str = "seed_train", sha256: str = "sha",
+    image_view: str = "matched_clean", transform: str = "clean",
+) -> ManifestExample:
     return ManifestExample(
         sample_id=sample_id, source_id="source", parent_id="parent", image_path=path,
-        sha256=sha256, label="authentic", split=split, image_view="matched_clean",
-        transform="clean", transform_parameter="", metadata={
+        sha256=sha256, label="authentic", split=split, image_view=image_view,
+        transform=transform, transform_parameter="", metadata={
             "dataset_name": "fixture", "generator_name": "unknown",
             "generator_checkpoint": "unknown", "capture_source": "unknown",
         },
@@ -99,6 +103,39 @@ class TextureExtractionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self._extract(root, encoder, [_example(image, sample_id="missing", sha256="")])
             self.assertEqual(encoder.calls, 0)
+
+    def test_rejects_non_matched_clean_views_before_encoder(self) -> None:
+        root = self._root()
+        image = root / "image.png"
+        Image.new("RGB", (16, 16)).save(image)
+        encoder = _Encoder()
+        for image_view, transform in (("source_original", "clean"), ("matched_clean", "jpeg")):
+            with self.subTest(image_view=image_view, transform=transform):
+                with self.assertRaises(ValueError):
+                    self._extract(root, encoder, [_example(
+                        image, sample_id=f"{image_view}-{transform}", image_view=image_view,
+                        transform=transform,
+                    )])
+        self.assertEqual(encoder.calls, 0)
+
+    def test_corrupt_or_stale_global_cache_is_reextracted_before_reuse(self) -> None:
+        root = self._root()
+        image = root / "image.png"
+        Image.new("RGB", (16, 16)).save(image)
+        encoder = _Encoder()
+        rows, _ = self._extract(root, encoder, [_example(image, sample_id="sample")])
+        torch.save(torch.zeros(1), rows[0].global_cache_path)
+        calls = encoder.calls
+        self._extract(root, encoder, [_example(image, sample_id="sample")])
+        self.assertGreater(encoder.calls, calls)
+        self.assertEqual(tuple(torch.load(rows[0].global_cache_path, weights_only=True).shape), (2, 3))
+        metadata_path = rows[0].global_cache_path.with_suffix(".meta.json")
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["resolved_revision"] = "stale"
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        calls = encoder.calls
+        self._extract(root, encoder, [_example(image, sample_id="sample")])
+        self.assertGreater(encoder.calls, calls)
 
     def test_coordinates_version_and_revision_invalidate_patch_cache(self) -> None:
         with self.subTest("invalidation"):

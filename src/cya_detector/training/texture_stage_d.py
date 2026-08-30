@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -70,6 +71,52 @@ def _valid_patch_cache(path: Path, *, contract: dict[str, Any]) -> bool:
         return False
 
 
+def _global_contract(
+    *, example: ManifestExample, loaded_clip: LoadedClip, matching_policy: str,
+    preprocessing_version: str, representation_version: str, layers: tuple[int, ...],
+) -> dict[str, Any]:
+    return {
+        "image_sha256": example.sha256, "image_view": example.image_view,
+        "transform": example.transform, "transform_parameter": example.transform_parameter,
+        "matching_policy": matching_policy, "model_identifier": loaded_clip.identifier,
+        "resolved_revision": loaded_clip.resolved_revision,
+        "preprocessing_version": preprocessing_version,
+        "representation_version": representation_version, "layers": list(layers),
+        "hidden_dimension": int(loaded_clip.model.config.hidden_size),
+    }
+
+
+def _global_metadata_path(path: Path) -> Path:
+    return path.with_suffix(".meta.json")
+
+
+def _valid_global_cache(path: Path, *, contract: dict[str, Any]) -> bool:
+    torch, _, _ = require_ml_dependencies()
+    try:
+        metadata = json.loads(_global_metadata_path(path).read_text(encoding="utf-8"))
+        tensor = torch.load(path, map_location="cpu", weights_only=True)
+        return metadata == contract and _valid_global_tensor(tensor, contract=contract)
+    except (OSError, json.JSONDecodeError, RuntimeError, TypeError, ValueError):
+        return False
+
+
+def _valid_global_tensor(tensor: Any, *, contract: dict[str, Any]) -> bool:
+    torch, _, _ = require_ml_dependencies()
+    return (
+        tuple(tensor.shape) == (len(contract["layers"]), contract["hidden_dimension"])
+        and tensor.dtype.is_floating_point
+        and bool(torch.isfinite(tensor).all())
+    )
+
+
+def _write_global_metadata(path: Path, contract: dict[str, Any]) -> None:
+    metadata_path = _global_metadata_path(path)
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = metadata_path.with_suffix(".tmp.json")
+    temporary.write_text(json.dumps(contract, sort_keys=True), encoding="utf-8")
+    temporary.replace(metadata_path)
+
+
 def _patch_pixels(patch: np.ndarray, processor: Any) -> Any:
     from PIL import Image
 
@@ -110,10 +157,13 @@ def extract_texture_features(
         raise ValueError("patch_size and batch_size must be positive")
     if any(example.split not in _ALLOWED_SPLITS for example in examples):
         raise ValueError("Texture extraction accepts only seed_train and selection_val examples")
+    if any(example.image_view != "matched_clean" or example.transform != "clean" for example in examples):
+        raise ValueError("Texture extraction accepts only matched-clean input views")
     if any(not example.sha256 for example in examples):
         raise ValueError("Every texture example must have an image SHA-256")
 
     started = time.perf_counter()
+    existing_global_paths = {path.resolve() for path in global_cache_root.rglob("*.pt")}
     globals_, global_report = extract_rine_features(
         loaded_clip=loaded_clip, examples=examples, cache_root=global_cache_root,
         matching_policy=matching_policy, preprocessing_version=preprocessing_version,
@@ -121,6 +171,45 @@ def extract_texture_features(
         batch_size=batch_size, device=device,
     )
     global_path_by_sample = {row.example.sample_id: row.cache_path for row in globals_}
+    global_contracts = {
+        example.sample_id: _global_contract(
+            example=example, loaded_clip=loaded_clip, matching_policy=matching_policy,
+            preprocessing_version=preprocessing_version,
+            representation_version=rine_representation_version, layers=layers,
+        )
+        for example in examples
+    }
+    for row in globals_:
+        if row.cache_path.resolve() not in existing_global_paths:
+            contract = global_contracts[row.example.sample_id]
+            tensor = torch.load(row.cache_path, map_location="cpu", weights_only=True)
+            if not _valid_global_tensor(tensor, contract=contract):
+                row.cache_path.unlink(missing_ok=True)
+                raise ValueError("Frozen RINE encoder returned an invalid global feature tensor")
+            _write_global_metadata(row.cache_path, contract)
+    invalid_globals = [
+        row for row in globals_
+        if not _valid_global_cache(row.cache_path, contract=global_contracts[row.example.sample_id])
+    ]
+    if invalid_globals:
+        for row in invalid_globals:
+            row.cache_path.unlink(missing_ok=True)
+            _global_metadata_path(row.cache_path).unlink(missing_ok=True)
+        refreshed, _ = extract_rine_features(
+            loaded_clip=loaded_clip, examples=[row.example for row in invalid_globals],
+            cache_root=global_cache_root, matching_policy=matching_policy,
+            preprocessing_version=preprocessing_version,
+            representation_version=rine_representation_version, layers=layers,
+            batch_size=batch_size, device=device,
+        )
+        for row in refreshed:
+            contract = global_contracts[row.example.sample_id]
+            tensor = torch.load(row.cache_path, map_location="cpu", weights_only=True)
+            if not _valid_global_tensor(tensor, contract=contract):
+                row.cache_path.unlink(missing_ok=True)
+                raise ValueError("Frozen RINE encoder returned an invalid global feature tensor")
+            _write_global_metadata(row.cache_path, contract)
+        global_path_by_sample = {row.example.sample_id: row.cache_path for row in refreshed} | global_path_by_sample
     patch_rows: list[tuple[ManifestExample, Path, Any, dict[str, Any]]] = []
     missing: list[tuple[ManifestExample, Path, Any, dict[str, Any]]] = []
     for example in examples:
@@ -176,8 +265,13 @@ def extract_texture_features(
     rows = [CachedTextureFeatures(example, global_path_by_sample[example.sample_id], path) for example, path, _, _ in patch_rows]
     elapsed = time.perf_counter() - started
     total_bytes = sum(row.global_cache_path.stat().st_size + row.patch_cache_path.stat().st_size for row in rows)
+    invalid_global_ids = {row.example.sample_id for row in invalid_globals}
+    missing_patch_ids = {row[0].sample_id for row in missing}
     report = {
-        "example_count": len(examples), "cache_hit_count": len(examples) - len(missing),
+        "example_count": len(examples), "cache_hit_count": sum(
+            example.sample_id not in invalid_global_ids and example.sample_id not in missing_patch_ids
+            for example in examples
+        ),
         "extracted_count": len(missing), "elapsed_seconds": elapsed,
         "extracted_images_per_second": len(missing) / elapsed if missing and elapsed else None,
         "cache_total_bytes": total_bytes, "cache_bytes_per_image": total_bytes / len(rows) if rows else 0,
