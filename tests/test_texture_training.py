@@ -363,6 +363,16 @@ class TextureCommandContractTests(unittest.TestCase):
             with self.subTest(seed=seed):
                 self.assertIn(str(seed), recipe)
 
+    def test_task9_matrix_never_backgrounds_or_parallelizes_runs(self) -> None:
+        recipe = self.targets.get("task9-matrix", "")
+        self.assertTrue(recipe, "task9-matrix has no recipe body")
+        self.assertNotRegex(
+            recipe,
+            r"(?<!&)&(?!&)|\bwait\b|\bxargs\b[^\n]*-P|\bmake\b[^\n]*-j",
+            "task9-matrix must never background or parallelize the nine training runs: simultaneous GPU "
+            "extraction/training would duplicate frozen-CLIP memory and race on the shared /content caches",
+        )
+
     def test_task9_caches_default_under_content_and_output_defaults_under_artifact_root(self) -> None:
         self.assertRegex(self.makefile_text, r"(?m)^TASK9_GLOBAL_CACHE\s*\?=\s*/content(/|\s|$)")
         self.assertRegex(self.makefile_text, r"(?m)^TASK9_PATCH_CACHE\s*\?=\s*/content(/|\s|$)")
