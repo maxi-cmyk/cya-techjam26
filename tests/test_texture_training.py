@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import re
 import shutil
 import unittest
@@ -209,6 +210,23 @@ class TextureTrainingTests(unittest.TestCase):
             for relative, digest in original_metadata["artifact_sha256"].items()
         ))
 
+    def test_overwrite_clears_an_incomplete_run_root_left_by_a_partial_publish_or_sync(self) -> None:
+        output_root = self.root / "incomplete-overwrite"
+        run_root = output_root / "global_local" / "seed_42"
+        (run_root / "checkpoints").mkdir(parents=True)
+        (run_root / "checkpoints" / "best_clean.pt").write_bytes(b"stale-partial-bytes")
+        with self.assertRaisesRegex(FileExistsError, "incomplete"):
+            self._train(root=output_root)
+        summary = self._train(root=output_root, overwrite=True)
+        self.assertEqual(summary["status"], "completed")
+        expected_relative = {
+            Path("checkpoints/best_clean.pt"), Path("checkpoints/latest.pt"),
+            Path("predictions/selection_val.csv"), Path("reports/metrics.json"),
+            Path("reports/training_history.json"), Path("metadata/run_metadata.json"),
+        }
+        self.assertEqual({path.relative_to(run_root) for path in run_root.rglob("*") if path.is_file()}, expected_relative)
+        self.assertNotEqual((run_root / "checkpoints" / "best_clean.pt").read_bytes(), b"stale-partial-bytes")
+
     def test_rejects_nonfinite_features_before_creating_a_run_directory(self) -> None:
         output_root = self.root / "nonfinite-runs"
         with self.assertRaisesRegex(ValueError, "non-finite"):
@@ -260,6 +278,18 @@ class TextureTrainingTests(unittest.TestCase):
             self._train(root=self.root / "bad-variant", variant="unknown")
         with self.assertRaisesRegex(ValueError, "configured texture seed"):
             self._train(root=self.root / "bad-seed", seed=45)
+
+    def test_requires_a_texture_section_and_fusion_dimension_rather_than_defaulting(self) -> None:
+        original = self.configuration
+        try:
+            self.configuration = {}
+            with self.assertRaisesRegex(ValueError, r"run_configuration\['texture'\]"):
+                self._train(root=self.root / "missing-texture-section")
+            self.configuration = {"texture": {}}
+            with self.assertRaisesRegex(ValueError, "texture.fusion_dimension"):
+                self._train(root=self.root / "missing-fusion-dimension")
+        finally:
+            self.configuration = original
 
     def test_public_boundary_keeps_the_locked_seed_set_even_if_caller_configuration_changes(self) -> None:
         original = self.configuration
@@ -338,6 +368,13 @@ class TextureTrainingTests(unittest.TestCase):
         with patch("torch.use_deterministic_algorithms", side_effect=deterministic_only):
             with self.assertRaisesRegex(RuntimeError, "determinism unavailable"):
                 self._train(root=self.root / "determinism")
+
+    def test_cuda_path_sets_cublas_workspace_config_before_enabling_determinism(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CUBLAS_WORKSPACE_CONFIG", None)
+            with patch("torch.cuda.is_available", return_value=True):
+                self._train(root=self.root / "cublas-workspace-config")
+            self.assertEqual(os.environ.get("CUBLAS_WORKSPACE_CONFIG"), ":4096:8")
 
 
 class TextureCommandContractTests(unittest.TestCase):

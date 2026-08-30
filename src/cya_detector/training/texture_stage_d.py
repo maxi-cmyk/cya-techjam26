@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import os
 import time
 import uuid
 from contextlib import nullcontext
@@ -28,6 +29,10 @@ _ALLOWED_SPLITS = {"seed_train", "selection_val"}
 APPROVED_MATCHING_POLICY = "fixed_q96"
 LOCKED_TEXTURE_VARIANTS = ("global_only", "local_only", "global_local")
 LOCKED_TEXTURE_SEEDS = (42, 43, 44)
+REQUIRED_RUN_ARTIFACTS = (
+    "checkpoints/best_clean.pt", "checkpoints/latest.pt", "predictions/selection_val.csv",
+    "reports/metrics.json", "reports/training_history.json", "metadata/run_metadata.json",
+)
 
 
 @dataclass(frozen=True)
@@ -402,13 +407,17 @@ def _replace_published_file(source: Path, destination: Path) -> None:
 
 
 def _artifact_sha256(root: Path) -> dict[str, str]:
-    """Hash every immutable run artifact except the metadata commit record itself."""
+    """Hash every required run artifact except the metadata commit record itself.
 
-    metadata = Path("metadata") / "run_metadata.json"
+    Hashes exactly the fixed REQUIRED_RUN_ARTIFACTS set (not a directory glob) so a stray
+    file that ever lands in staging cannot get hashed and then fail the gate's exact-set
+    comparison against a run that is otherwise completely and correctly published.
+    """
+
     return {
-        str(path.relative_to(root)).replace("\\", "/"): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted(path for path in root.rglob("*") if path.is_file())
-        if path.relative_to(root) != metadata
+        relative: hashlib.sha256((root / relative).read_bytes()).hexdigest()
+        for relative in REQUIRED_RUN_ARTIFACTS
+        if relative != "metadata/run_metadata.json"
     }
 
 
@@ -517,7 +526,11 @@ def train_texture_head(
     """Train one lightweight head from frozen clean-only global and patch caches."""
 
     torch, _, _ = require_ml_dependencies()
-    texture_config = run_configuration.get("texture", {})
+    if "texture" not in run_configuration:
+        raise ValueError("Texture training requires run_configuration['texture']")
+    texture_config = run_configuration["texture"]
+    if "fusion_dimension" not in texture_config:
+        raise ValueError("Texture training requires configured texture.fusion_dimension")
     if variant not in LOCKED_TEXTURE_VARIANTS:
         raise ValueError("Texture training requires a configured texture variant")
     if seed not in LOCKED_TEXTURE_SEEDS:
@@ -544,16 +557,19 @@ def train_texture_head(
     completed_marker = run_root / "metadata" / "run_metadata.json"
     if run_root.exists() and completed_marker.is_file() and not overwrite:
         raise FileExistsError(f"Refusing completed texture run overwrite: {run_root}")
-    if run_root.exists() and not completed_marker.is_file():
+    if run_root.exists() and not completed_marker.is_file() and not overwrite:
         raise FileExistsError(f"Refusing incomplete texture run overwrite: {run_root}")
 
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+        # cuBLAS refuses deterministic GEMMs (every Linear head uses one) unless this is set;
+        # it must be present before the first cuBLAS call, which the next line can trigger.
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     torch.use_deterministic_algorithms(True, warn_only=False)
     layer_count, global_dimension = train_global.shape[1:]
     _, patch_dimension = train_patch.shape[1:]
-    fusion_dimension = int(texture_config.get("fusion_dimension", 256))
+    fusion_dimension = int(texture_config["fusion_dimension"])
     model = build_texture_head(
         variant=variant, layer_count=layer_count, global_dimension=global_dimension,
         patch_dimension=patch_dimension, fusion_dimension=fusion_dimension,

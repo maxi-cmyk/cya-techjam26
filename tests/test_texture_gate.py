@@ -88,6 +88,12 @@ class TextureGateTests(unittest.TestCase):
         self.assertEqual(decision["decision"], "continue_to_robustness_design")
         self.assertGreater(decision["aggregate"]["clean_accuracy_mean_delta"], 0.0)
         self.assertGreater(decision["aggregate"]["corrected_global_errors"], 0)
+        self.assertIn("local_only_accuracy_mean", decision["aggregate"])
+        for row in decision["per_seed"]:
+            self.assertIn("local_only_accuracy", row)
+            self.assertEqual(row["local_only_accuracy"], row["global_only_accuracy"])
+        with (self.root / "comparison" / "per_seed_metrics.csv").open(newline="", encoding="utf-8") as handle:
+            self.assertIn("local_only_accuracy", next(csv.DictReader(handle)))
         expected = {
             self.root / "comparison" / "global_local_comparison.json",
             self.root / "comparison" / "per_seed_metrics.csv",

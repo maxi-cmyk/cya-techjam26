@@ -12,14 +12,13 @@ from typing import Any
 
 from cya_detector.evaluation.metrics import binary_metrics
 from cya_detector.predictions import PredictionRecord, read_predictions
-from cya_detector.training.texture_stage_d import APPROVED_MATCHING_POLICY, LOCKED_TEXTURE_SEEDS, LOCKED_TEXTURE_VARIANTS
+from cya_detector.training.texture_stage_d import (
+    APPROVED_MATCHING_POLICY, LOCKED_TEXTURE_SEEDS, LOCKED_TEXTURE_VARIANTS, REQUIRED_RUN_ARTIFACTS,
+)
 
 
 _VARIANTS = LOCKED_TEXTURE_VARIANTS
-_REQUIRED_RUN_ARTIFACTS = (
-    "checkpoints/best_clean.pt", "checkpoints/latest.pt", "predictions/selection_val.csv",
-    "reports/metrics.json", "reports/training_history.json", "metadata/run_metadata.json",
-)
+_REQUIRED_RUN_ARTIFACTS = REQUIRED_RUN_ARTIFACTS
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -168,14 +167,17 @@ def compare_texture_pilot(
         aligned = {variant: _aligned(records, reference) for variant, records in loaded.items()}
         global_metrics = binary_metrics(aligned["global_only"])
         fused_metrics = binary_metrics(aligned["global_local"])
+        local_metrics = binary_metrics(aligned["local_only"])
         _require_finite(global_metrics, name="global_only_metrics")
         _require_finite(fused_metrics, name="global_local_metrics")
+        _require_finite(local_metrics, name="local_only_metrics")
         corrected = sum(not _correct(left) and _correct(right) for left, right in zip(aligned["global_only"], aligned["global_local"], strict=True))
         introduced = sum(_correct(left) and not _correct(right) for left, right in zip(aligned["global_only"], aligned["global_local"], strict=True))
         corrected_total += corrected
         introduced_total += introduced
         per_seed.append({
             "seed": seed, "global_only_accuracy": global_metrics["accuracy"],
+            "local_only_accuracy": local_metrics["accuracy"],
             "global_local_accuracy": fused_metrics["accuracy"],
             "clean_accuracy_delta": fused_metrics["accuracy"] - global_metrics["accuracy"],
             "authentic_accuracy_delta": fused_metrics["authentic_accuracy"] - global_metrics["authentic_accuracy"],
@@ -184,6 +186,7 @@ def compare_texture_pilot(
         })
     aggregate = {
         "global_only_accuracy_mean": statistics.fmean(row["global_only_accuracy"] for row in per_seed),
+        "local_only_accuracy_mean": statistics.fmean(row["local_only_accuracy"] for row in per_seed),
         "global_local_accuracy_mean": statistics.fmean(row["global_local_accuracy"] for row in per_seed),
         "clean_accuracy_mean_delta": statistics.fmean(row["clean_accuracy_delta"] for row in per_seed),
         "authentic_accuracy_mean_delta": statistics.fmean(row["authentic_accuracy_delta"] for row in per_seed),
