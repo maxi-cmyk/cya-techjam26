@@ -1,17 +1,47 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
+import re
 import shutil
 import unittest
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
 import torch
+from PIL import Image
 
 from cya_detector.data.dataset import ManifestExample
-from cya_detector.training.texture_stage_d import CachedTextureFeatures
+from cya_detector.evaluation.texture_gate import compare_texture_pilot
+from cya_detector.models.clip_baseline import LoadedClip
+from cya_detector.training.texture_stage_d import (
+    APPROVED_MATCHING_POLICY,
+    LOCKED_TEXTURE_SEEDS,
+    LOCKED_TEXTURE_VARIANTS,
+    CachedTextureFeatures,
+    extract_texture_features,
+    train_texture_head,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH = REPO_ROOT / "configs/colab.json"
+MAKEFILE_PATH = REPO_ROOT / "Makefile"
+NOTEBOOK_PATH = REPO_ROOT / "notebooks/07_texture_stage_d.ipynb"
+
+_MAKE_TARGET_PATTERN = re.compile(
+    r"^(?P<name>[A-Za-z0-9_.-]+)\s*:(?!=)(?P<deps>[^\n]*)\n(?P<recipe>(?:\t[^\n]*\n?)*)",
+    re.MULTILINE,
+)
+
+
+def _parse_make_targets(text: str) -> dict[str, str]:
+    """Map each Makefile target name to its tab-indented recipe body."""
+
+    return {match.group("name"): match.group("recipe") for match in _MAKE_TARGET_PATTERN.finditer(text)}
 
 
 class TextureTrainingTests(unittest.TestCase):
@@ -124,6 +154,12 @@ class TextureTrainingTests(unittest.TestCase):
                     self.assertEqual({path.relative_to(run_root) for path in run_root.rglob("*") if path.is_file()}, expected_relative)
                     self.assertFalse(any(".tmp" in path.name for path in output_root.rglob("*")))
                     self.assertEqual(json.loads((run_root / "reports/metrics.json").read_text())["selection_split"], "selection_val")
+                    with (run_root / "predictions/selection_val.csv").open(newline="", encoding="utf-8") as handle:
+                        prediction_rows = list(csv.DictReader(handle))
+                    self.assertTrue(prediction_rows)
+                    self.assertTrue(
+                        all(row["matching_policy"] == APPROVED_MATCHING_POLICY for row in prediction_rows)
+                    )
 
     def test_completed_run_requires_explicit_overwrite_and_repeat_is_deterministic(self) -> None:
         first_root = self.root / "first"
@@ -302,6 +338,223 @@ class TextureTrainingTests(unittest.TestCase):
         with patch("torch.use_deterministic_algorithms", side_effect=deterministic_only):
             with self.assertRaisesRegex(RuntimeError, "determinism unavailable"):
                 self._train(root=self.root / "determinism")
+
+
+class TextureCommandContractTests(unittest.TestCase):
+    """The break caught here is a launcher that reimplements training instead of calling the locked CLIs."""
+
+    def setUp(self) -> None:
+        self.makefile_text = MAKEFILE_PATH.read_text(encoding="utf-8")
+        self.targets = _parse_make_targets(self.makefile_text)
+        self.config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+
+    def test_makefile_declares_all_four_task9_targets(self) -> None:
+        for target in ("task9-test", "task9-run", "task9-matrix", "task9-compare"):
+            with self.subTest(target=target):
+                self.assertIn(target, self.targets, f"Makefile is missing target {target!r}")
+
+    def test_task9_matrix_invokes_every_configured_variant_and_seed_combination(self) -> None:
+        recipe = self.targets.get("task9-matrix", "")
+        self.assertTrue(recipe, "task9-matrix has no recipe body")
+        for variant in self.config["texture"]["variants"]:
+            with self.subTest(variant=variant):
+                self.assertIn(variant, recipe)
+        for seed in self.config["texture"]["seeds"]:
+            with self.subTest(seed=seed):
+                self.assertIn(str(seed), recipe)
+
+    def test_task9_caches_default_under_content_and_output_defaults_under_artifact_root(self) -> None:
+        self.assertRegex(self.makefile_text, r"(?m)^TASK9_GLOBAL_CACHE\s*\?=\s*/content(/|\s|$)")
+        self.assertRegex(self.makefile_text, r"(?m)^TASK9_PATCH_CACHE\s*\?=\s*/content(/|\s|$)")
+        self.assertRegex(
+            self.makefile_text,
+            r"(?m)^TASK9_OUTPUT_ROOT\s*\?=\s*\$\(ARTIFACT_ROOT\)/task9\s*$",
+        )
+
+    def test_task9_run_and_compare_targets_reference_the_locked_training_and_gate_clis(self) -> None:
+        run_recipe = self.targets.get("task9-run", "")
+        self.assertIn("train_texture_pilot.py", run_recipe)
+        compare_recipe = self.targets.get("task9-compare", "")
+        self.assertIn("compare_texture_pilot.py", compare_recipe)
+
+    def test_notebook_is_a_thin_launcher_with_no_inlined_model_or_training_implementation(self) -> None:
+        self.assertTrue(NOTEBOOK_PATH.is_file(), f"{NOTEBOOK_PATH} does not exist")
+        notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
+        code_cells = [cell for cell in notebook["cells"] if cell.get("cell_type") == "code"]
+        self.assertTrue(code_cells, "notebook has no code cells")
+        source_text = "\n".join("".join(cell["source"]) for cell in code_cells)
+
+        forbidden_patterns = (
+            r"class\s+\w+\s*\(",
+            r"nn\.Module",
+            r"nn\.Linear",
+            r"nn\.Sequential",
+            r"def\s+forward\s*\(",
+            r"def\s+train_\w*\s*\(",
+            r"loss\.backward\(\)",
+            r"optimizer\.step\(\)",
+            r"zero_grad\(\)",
+            r"BCEWithLogitsLoss",
+            r"torch\.optim",
+            r"masked_patch_weights",
+            r"build_texture_head",
+            r"AdamW",
+        )
+        for pattern in forbidden_patterns:
+            with self.subTest(pattern=pattern):
+                self.assertNotRegex(source_text, pattern)
+
+        for script in ("extract_texture_features.py", "train_texture_pilot.py", "compare_texture_pilot.py"):
+            with self.subTest(script=script):
+                self.assertIn(script, source_text)
+
+
+class _FixtureProcessor:
+    """A dependency-free stand-in for the locked CLIP processor."""
+
+    def __call__(self, *, images, return_tensors: str):
+        array = torch.as_tensor(np.array(images.convert("RGB"), copy=True), dtype=torch.float32)
+        pixels = array.permute(2, 0, 1).unsqueeze(0) / 255.0
+        return {"pixel_values": torch.nn.functional.interpolate(pixels, size=(16, 16))}
+
+
+class _FixtureEncoder:
+    """A dependency-free stand-in for the frozen CLIP vision tower."""
+
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(num_hidden_layers=2, hidden_size=3, projection_dim=2)
+        self.calls = 0
+
+    def __call__(self, *, pixel_values, output_hidden_states=False, return_dict=False):
+        self.calls += 1
+        count = pixel_values.shape[0]
+        embeds = torch.arange(count * 2, dtype=torch.float32).reshape(count, 2)
+        states = tuple(torch.full((count, 1, 3), float(layer)) for layer in range(3))
+        return SimpleNamespace(image_embeds=embeds, hidden_states=states)
+
+
+class TextureFixtureSmokeTests(unittest.TestCase):
+    """The break caught here is any pipeline stage that requires pretrained weights, a GPU, or
+    that reaches outside its declared temporary root into the real repository artifacts or a
+    Drive-like path."""
+
+    def setUp(self) -> None:
+        self.root = Path(".tmp") / f"texture-e2e-{uuid.uuid4().hex}"
+        self.root.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    @staticmethod
+    def _snapshot(directory: Path) -> set[tuple[str, int]]:
+        if not directory.is_dir():
+            return set()
+        return {
+            (str(path.relative_to(directory)), path.stat().st_size)
+            for path in directory.rglob("*")
+            if path.is_file()
+        }
+
+    def _examples(self) -> list[ManifestExample]:
+        specifications = [
+            ("train-authentic", "seed_train", "authentic"),
+            ("train-ai", "seed_train", "ai_generated"),
+            ("val-authentic", "selection_val", "authentic"),
+            ("val-ai", "selection_val", "ai_generated"),
+        ]
+        examples: list[ManifestExample] = []
+        for sample_id, split, label in specifications:
+            image_path = self.root / "images" / f"{sample_id}.png"
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (16, 16), (10, 20, 30)).save(image_path)
+            examples.append(
+                ManifestExample(
+                    sample_id=sample_id,
+                    source_id=f"source-{sample_id}",
+                    parent_id=f"parent-{sample_id}",
+                    image_path=image_path,
+                    sha256=f"sha-{sample_id}",
+                    label=label,
+                    split=split,
+                    image_view="matched_clean",
+                    transform="clean",
+                    transform_parameter="",
+                    metadata={
+                        "dataset_name": "fixture",
+                        "generator_name": "unknown",
+                        "generator_checkpoint": "unknown",
+                        "capture_source": "fixture",
+                    },
+                )
+            )
+        return examples
+
+    def test_full_pipeline_runs_under_a_temporary_root_without_touching_real_artifacts_or_drive(self) -> None:
+        artifacts_root = REPO_ROOT / "artifacts"
+        baseline_artifacts = self._snapshot(artifacts_root)
+
+        encoder = _FixtureEncoder()
+        loaded_clip = LoadedClip(encoder, _FixtureProcessor(), "fixture-model", "requested", "resolved", 2)
+        rows, extraction_report = extract_texture_features(
+            loaded_clip=loaded_clip,
+            examples=self._examples(),
+            global_cache_root=self.root / "global_cache",
+            patch_cache_root=self.root / "patch_cache",
+            matching_policy="fixed_q96",
+            preprocessing_version="prep-v1",
+            rine_representation_version="rine-v1",
+            texture_extractor_version="texture-v1",
+            layers=(1, 2),
+            patch_size=16,
+            patch_count=4,
+            batch_size=2,
+            device="cpu",
+        )
+        self.assertEqual(len(rows), 4)
+        self.assertGreater(encoder.calls, 0)
+
+        output_root = self.root / "runs"
+        for variant in LOCKED_TEXTURE_VARIANTS:
+            for seed in LOCKED_TEXTURE_SEEDS:
+                with self.subTest(variant=variant, seed=seed):
+                    summary = train_texture_head(
+                        rows=rows,
+                        variant=variant,
+                        seed=seed,
+                        output_root=output_root,
+                        overwrite=False,
+                        run_configuration={"texture": {"fusion_dimension": 4}},
+                        device="cpu",
+                        learning_rate=0.01,
+                        weight_decay=0.0,
+                        warmup_fraction=0.0,
+                        max_epochs=1,
+                        early_stopping_patience=1,
+                        physical_batch_size=2,
+                        effective_batch_size=2,
+                        threshold=0.5,
+                        task4_extraction_report=extraction_report,
+                    )
+                    self.assertEqual(summary["status"], "completed")
+
+        decision = compare_texture_pilot(
+            experiment_root=output_root,
+            seeds=LOCKED_TEXTURE_SEEDS,
+            max_per_class_regression=0.99,
+        )
+        self.assertIn(decision["decision"], ("continue_to_robustness_design", "reject_texture_clean_gate"))
+        self.assertTrue((output_root / "comparison" / "global_local_comparison.json").is_file())
+        self.assertTrue((output_root / "comparison" / "per_seed_metrics.csv").is_file())
+        self.assertTrue((output_root / "comparison" / "latency_comparison.json").is_file())
+        self.assertTrue((output_root / "metadata" / "artifact_manifest.json").is_file())
+
+        self.assertEqual(
+            self._snapshot(artifacts_root),
+            baseline_artifacts,
+            "the fixture pipeline must not write beneath the real repository artifacts/ directory",
+        )
+        drive_like = [path for path in self.root.rglob("*") if "drive" in path.name.lower()]
+        self.assertEqual(drive_like, [], "the fixture pipeline must not create any Drive-like path")
 
 
 if __name__ == "__main__":

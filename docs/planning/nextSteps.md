@@ -60,7 +60,7 @@ Every notebook remains a thin launcher for versioned modules in `src/`. A runtim
 | 6. RINE Stage B | Clean milestone complete | Provisionally retain, 99.39% clean | Confirm with Task 3 and class-regression gates |
 | 7. Frequency Stage 1 | Clean milestone complete | Retain magnitude/residual at 83.03%; drop phase; early exit remains disabled | Robustness and incremental fusion after Task 3 |
 | 8. Color/physical auxiliaries | Current matched-data milestone complete | Lab wins the color-only ablation at 82.42%; PRNU/CA not eligible on matched-Q96 | Color robustness/fusion after Task 3; Task 8B revisits physical families with native data |
-| 9. Texture path | Patch selector complete | Deterministic top-k non-overlapping Laplacian/Sobel selection passes fixtures | Implement global+patch encoding and benchmark cost |
+| 9. Texture path | Clean pilot workflow implemented, no Colab run yet | Deterministic top-k non-overlapping Laplacian/Sobel patch selection, masked-attention heads, cached extraction/training/gate, `task9-*` Make targets, and `07_texture_stage_d.ipynb` all pass fixtures | Run the real Colab extraction/training/gate on fixed-Q96; only then decide clean retention |
 | 10. Packaging | Not started | Final-test remains sealed | Wait for Tasks 3, 6-9 retention decisions |
 
 The critical path is now Task 3. Task 9 model integration can proceed in parallel, but no final feature retention, calibration, or final-test run is valid until the independent transformation rows exist.
@@ -301,16 +301,21 @@ The verified CPU run extracted 67 features for 1,390 rows and completed all nine
   - [x] Record the fail-closed decision and hashes in `artifacts/task8b/reports/retention_decision.json`; downstream binary/robustness evaluation is not run without a candidate.
   - [x] Retain no Task 8B physical feature and make no camera or lens authenticity claim.
 
-[ ] **Task 9 — Add the texture-aware local-detail path under a fixed budget**
+[ ] **Task 9 — Add the texture-aware local-detail path under a fixed budget** *(clean pilot workflow implemented; no real Colab run recorded)*
 
   - [x] Generate multi-scale Laplacian/Sobel energy maps and select fixed top-k non-overlapping patches before CLIP input conversion.
   - [x] Add deterministic fixture coverage for non-overlap, stable ordering, top-k bounds, high-detail selection, small images, and invalid parameters.
-  - [ ] Keep a global image view so patch selection cannot discard semantic context.
+  - [x] Keep a global image view so patch selection cannot discard semantic context: every run always encodes the frozen global RINE view alongside up to four local patches.
+  - [x] Freeze the clean-only pilot boundary, patch budget, and variant/seed matrix in `configs/colab.json["texture"]`: `patch_size` 112, `patch_count` 4 (a maximum five-view-per-image encoding budget — one global view plus up to four 112 px source patches, upsampled by the locked CLIP processor to its native 336 px input), `variants` `global_only`/`local_only`/`global_local`, and `seeds` 42/43/44 (nine runs total). The pilot trains and compares only on the fixed-Q96 matched-clean manifest's `seed_train` and `selection_val` splits; it never reads `self_train_pool`, sealed `final_test`, source-original images, Task 3 robustness variants, or Task 8B data, and CLIP remains fully frozen throughout.
+  - [x] Implement masked-attention `global_only`/`local_only`/`global_local` heads, frozen global/patch feature extraction and caching (large RINE and patch caches stay under `/content`; nothing is written to Drive during extraction), per-variant/seed training with atomic artifact publication, and the deterministic clean gate (`continue_to_robustness_design` or `reject_texture_clean_gate`) in `src/cya_detector/{models,training,evaluation}/`.
+  - [x] Add `scripts/extract_texture_features.py`, `scripts/train_texture_pilot.py`, and `scripts/compare_texture_pilot.py`, and wire them to `make task9-test`, `task9-extract`, `task9-run`, `task9-matrix`, and `task9-compare`. `task9-matrix` runs all nine variant/seed combinations sequentially, never concurrently, because simultaneous GPU extraction would duplicate frozen-CLIP memory and race on the shared `/content` caches.
+  - [x] Add `07_texture_stage_d.ipynb` as a thin Colab launcher that stages the fixed-Q96 manifest, extracts/caches features once under `/content`, resumes per-variant/seed training, and copies each completed run — and only a completed run — to the shared Drive artifact root (`My Drive/cya-techjam26/artifacts/task9`), so no empty Drive directory is created ahead of a result.
   - [ ] Benchmark shared frozen-CLIP patch encoding against a small shared patch head if repeated CLIP encodes exceed the measured compute budget.
-  - [ ] Train soft attention/aggregation and fusion weights; never use smoothness, sharpness, edge density, LBP, GLCM, or OCR confidence as fixed verdict rules.
+  - [ ] Run the real Colab extraction and all nine variant/seed trainings on the fixed-Q96 pilot manifest; never use smoothness, sharpness, edge density, LBP, GLCM, or OCR confidence as fixed verdict rules.
   - [ ] Tune patch size, patch count, energy scale, and aggregation only on `selection_val`.
   - [ ] Measure global-only, local-only, and combined performance on clean and resize-0.5x/0.25x, including authentic false-positive changes.
   - [ ] Measure redundancy with frequency and PRNU outputs before counting the texture path as additional evidence.
+  - [ ] Apply the clean gate to the real nine-run comparison. A `continue_to_robustness_design` decision only authorizes writing a later, separately specified Task 3 robustness continuation plan and cost estimate before any transformed Task 9 training input is materialized; it does not retain Task 9 by itself. A `reject_texture_clean_gate` decision means Task 9 remains tested-and-rejected and RINE (Task 6) remains the retained global representation. Neither outcome is recorded yet — no real Colab run has produced evidence.
   - [ ] Complete when its accuracy benefit justifies the approximately `1 + k` view-encoding cost and the fixed inference budget is recorded.
 
 [ ] **Task 10 — Freeze, calibrate, package, and only then attempt optional improvements**

@@ -18,7 +18,7 @@ from cya_detector.data.dataset import ManifestExample
 from cya_detector.evaluation.metrics import evaluate_predictions
 from cya_detector.features.texture import prepare_texture_patch_views, texture_patch_cache_key
 from cya_detector.models.clip_baseline import LoadedClip, require_ml_dependencies
-from cya_detector.models.texture import TEXTURE_VARIANTS, build_texture_head
+from cya_detector.models.texture import build_texture_head
 from cya_detector.predictions import PredictionRecord, write_predictions
 from cya_detector.training.clip_stage_a import cache_location
 from cya_detector.training.rine_stage_b import extract_rine_features
@@ -622,7 +622,7 @@ def train_texture_head(
                     sample_id=row.example.sample_id, source_id=row.example.source_id,
                     parent_id=row.example.parent_id, split=row.example.split, label=row.example.label,
                     logit=float(logit), probability=float(probability), checkpoint="best_clean",
-                    seed=seed, matching_policy="matched_clean", transform=row.example.transform,
+                    seed=seed, matching_policy=APPROVED_MATCHING_POLICY, transform=row.example.transform,
                     transform_parameter=row.example.transform_parameter, **row.example.metadata,
                 )
                 for row, logit, probability in zip(selection_rows, logits.tolist(), probabilities.tolist(), strict=True)

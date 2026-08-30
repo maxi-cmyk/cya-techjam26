@@ -46,3 +46,29 @@ without binary labels, records the retain/reject decision, and syncs reports to
 the existing Drive artifact root. It stops before model fitting whenever source,
 nuisance, or physical-estimator validation fails. The current licensed pilot
 finishes with no physical feature retained.
+
+`07_texture_stage_d.ipynb` runs after Task 2's fixed-Q96 pilot manifest exists.
+It is a thin launcher only: every cell calls `scripts/extract_texture_features.py`,
+`scripts/train_texture_pilot.py`, or `scripts/compare_texture_pilot.py` (the same
+`task9-*` Make targets), and no model or training code is inlined in the notebook
+itself. It trains and compares only on the fixed-Q96 matched-clean manifest's
+`seed_train` and `selection_val` splits, never on `self_train_pool`, sealed
+`final_test`, source-original images, Task 3 robustness variants, or Task 8B
+data; CLIP stays fully frozen throughout.
+
+The notebook mounts Drive, stages the manifest and matched-clean images locally,
+extracts and caches frozen global RINE features plus up to four non-overlapping
+112 px source patches (upsampled by the locked CLIP processor to 336 px, for a
+five-view-per-image encoding budget) exactly once under `/content`, then trains
+the three variants (`global_only`, `local_only`, `global_local`) across seeds
+42/43/44 — nine runs total reusing the same caches. Each run is copied to the
+shared Drive artifact root (`My Drive/cya-techjam26/artifacts/task9`) only after
+it completes, so an interrupted or not-yet-started run never creates an empty
+Drive directory; rerunning the notebook after a runtime reset skips any run
+already found complete either locally or in that Drive tree. After all nine
+runs finish, it applies the deterministic clean gate. A
+`continue_to_robustness_design` decision only authorizes a later, separately
+specified Task 3 robustness continuation — it does not retain Task 9 by itself.
+A `reject_texture_clean_gate` decision means Task 9 remains tested-and-rejected
+and RINE (Task 6) remains the retained global representation. No real Colab run
+of this notebook has been recorded yet.

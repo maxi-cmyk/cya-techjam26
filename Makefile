@@ -1,4 +1,4 @@
-.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare task8b-extract-genimage task8b-inventory task8b-manifest task8b-readiness task8b-matched task8b-prepare task8b-prnu-references task8b-prnu-validate task8b-decision
+.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare task8b-extract-genimage task8b-inventory task8b-manifest task8b-readiness task8b-matched task8b-prepare task8b-prnu-references task8b-prnu-validate task8b-decision task9-test task9-extract task9-run task9-matrix task9-compare
 
 DATA_ROOT ?= /content/hackathon_data
 ARTIFACT_ROOT ?= artifacts
@@ -131,3 +131,38 @@ task8b-prnu-validate:
 
 task8b-decision:
 	python scripts/decide_task8b.py --matched-readiness $(TASK8B_ARTIFACT_ROOT)/audits/matched_readiness_report.json --prnu-validation $(TASK8B_ARTIFACT_ROOT)/audits/prnu_signal_validation.json --output $(TASK8B_ARTIFACT_ROOT)/reports/retention_decision.json
+
+TASK9_MANIFEST ?= $(ARTIFACT_ROOT)/task2/fixed_q96_manifest.csv
+TASK9_OUTPUT_ROOT ?= $(ARTIFACT_ROOT)/task9
+TASK9_GLOBAL_CACHE ?= /content/rine_feature_cache
+TASK9_PATCH_CACHE ?= /content/texture_patch_cache
+TASK9_CACHE_PAYLOAD ?= /content/texture_patch_cache/task9_cache_payload.json
+TASK9_VARIANT ?= global_only
+TASK9_SEED ?= 42
+TASK9_DEVICE ?= cpu
+
+task9-test:
+	PYTHONPATH=src python -m unittest tests.test_config tests.test_features_texture tests.test_texture_model tests.test_texture_extraction tests.test_texture_training tests.test_texture_gate -v
+
+# Frozen global/patch feature extraction only needs to run once; every one of
+# the nine variant/seed training runs below reuses the same cached tensors.
+task9-extract:
+	python scripts/extract_texture_features.py --manifest $(TASK9_MANIFEST) --cache-payload $(TASK9_CACHE_PAYLOAD) --global-cache-root $(TASK9_GLOBAL_CACHE) --patch-cache-root $(TASK9_PATCH_CACHE)
+
+task9-run: task9-extract
+	python scripts/train_texture_pilot.py --cached-features $(TASK9_CACHE_PAYLOAD) --variant $(TASK9_VARIANT) --seed $(TASK9_SEED) --output-root $(TASK9_OUTPUT_ROOT) --device $(TASK9_DEVICE)
+
+# Explicit sequential loop over every configured variant and seed. This never
+# runs the nine trainings concurrently: simultaneous GPU extraction/training
+# would duplicate frozen-CLIP memory on the shared Colab GPU and race on the
+# shared /content feature caches.
+task9-matrix: task9-extract
+	for variant in global_only local_only global_local; do \
+		for seed in 42 43 44; do \
+			python scripts/train_texture_pilot.py --cached-features $(TASK9_CACHE_PAYLOAD) --variant $$variant --seed $$seed --output-root $(TASK9_OUTPUT_ROOT) --device $(TASK9_DEVICE); \
+		done; \
+	done
+
+# Only meaningful after all nine task9-matrix runs have completed.
+task9-compare:
+	python scripts/compare_texture_pilot.py --output-root $(TASK9_OUTPUT_ROOT)
