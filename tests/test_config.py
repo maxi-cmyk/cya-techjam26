@@ -25,6 +25,31 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             validate_config(candidate)
 
+    def test_benchmark_scalar_numeric_fields_reject_booleans(self) -> None:
+        for field in ("color_jitter_fraction", "center_crop_fraction"):
+            for value in (False, True):
+                with self.subTest(field=field, value=value):
+                    candidate = copy.deepcopy(self.config)
+                    candidate["benchmark_transforms"][field] = value
+                    with self.assertRaises(ConfigError):
+                        validate_config(candidate)
+
+    def test_benchmark_list_numeric_elements_reject_booleans(self) -> None:
+        fields = (
+            "jpeg_quality",
+            "gaussian_blur_sigma",
+            "resize_scale",
+            "gaussian_noise_sigma",
+        )
+        for field in fields:
+            for index in range(len(self.config["benchmark_transforms"][field])):
+                for value in (False, True):
+                    with self.subTest(field=field, index=index, value=value):
+                        candidate = copy.deepcopy(self.config)
+                        candidate["benchmark_transforms"][field][index] = value
+                        with self.assertRaises(ConfigError):
+                            validate_config(candidate)
+
     def test_score_weights_remain_equal(self) -> None:
         candidate = copy.deepcopy(self.config)
         candidate["evaluation"]["clean_weight"] = 0.6

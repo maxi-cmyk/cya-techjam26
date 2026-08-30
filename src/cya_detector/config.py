@@ -100,6 +100,26 @@ def _require_probability(value: Any, *, name: str) -> float:
     return numeric
 
 
+def _matches_frozen_numeric(
+    actual: Any,
+    expected: float | list[int | float],
+) -> bool:
+    if isinstance(expected, list):
+        return (
+            isinstance(actual, list)
+            and len(actual) == len(expected)
+            and all(
+                _matches_frozen_numeric(actual_item, expected_item)
+                for actual_item, expected_item in zip(actual, expected, strict=True)
+            )
+        )
+    return (
+        not isinstance(actual, bool)
+        and isinstance(actual, (int, float))
+        and actual == expected
+    )
+
+
 def load_config(path: str | Path) -> dict[str, Any]:
     """Load and validate a version-1 JSON configuration."""
 
@@ -148,7 +168,7 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("Benchmark transform chaining must remain disabled")
 
     for name, expected in EXPECTED_TRANSFORMS.items():
-        if transforms.get(name) != expected:
+        if not _matches_frozen_numeric(transforms[name], expected):
             raise ConfigError(f"Unexpected {name}: expected {expected!r}")
 
     transform_engine = _require_exact_keys(
