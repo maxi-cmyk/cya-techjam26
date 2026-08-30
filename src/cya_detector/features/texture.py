@@ -118,6 +118,8 @@ def prepare_texture_patch_views(
         raise ValueError("patch_size must be positive")
     if patch_count <= 0:
         raise ValueError("patch_count must be positive")
+    if patch_count > 4:
+        raise ValueError("patch_count must not exceed 4")
 
     source = np.asarray(image)
     if source.ndim != 3 or source.shape[-1] < 3:
@@ -133,7 +135,8 @@ def prepare_texture_patch_views(
         padded = np.pad(
             source,
             ((top_pad, bottom_pad), (left_pad, right_pad), (0, 0)),
-            mode="edge",
+            mode="constant",
+            constant_values=0,
         )
     else:
         padded = source

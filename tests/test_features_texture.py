@@ -87,7 +87,11 @@ class TexturePatchTests(unittest.TestCase):
         self.assertEqual(views.original_shape, (100, 101))
         self.assertEqual(views.padded_shape, (112, 112))
         self.assertEqual(views.patch_boxes, ((0, 0, 112, 112),))
-        np.testing.assert_array_equal(views.patches[0][5:105, 5:106], image)
+        np.testing.assert_array_equal(views.patches[0][6:106, 5:106], image)
+        np.testing.assert_array_equal(views.patches[0][:6], 0.0)
+        np.testing.assert_array_equal(views.patches[0][106:], 0.0)
+        np.testing.assert_array_equal(views.patches[0][:, :5], 0.0)
+        np.testing.assert_array_equal(views.patches[0][:, 106:], 0.0)
 
     def test_padding_has_one_real_patch_and_trailing_false_entries(self) -> None:
         image = self.rng.random((100, 101, 3)).astype(np.float32)
@@ -104,6 +108,11 @@ class TexturePatchTests(unittest.TestCase):
         bad[0, 0, 0] = np.nan
         with self.assertRaises(ValueError):
             prepare_texture_patch_views(bad, patch_size=112, patch_count=1)
+
+    def test_rejects_patch_count_above_fixed_maximum(self) -> None:
+        image = np.zeros((336, 336, 3), dtype=np.float32)
+        with self.assertRaises(ValueError):
+            prepare_texture_patch_views(image, patch_size=112, patch_count=5)
 
     def test_prepared_patches_do_not_share_writable_memory(self) -> None:
         image = np.zeros((112, 112, 3), dtype=np.float32)
