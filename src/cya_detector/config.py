@@ -26,6 +26,7 @@ REQUIRED_SECTIONS = {
     "features",
     "frequency",
     "auxiliary",
+    "texture",
     "optimization",
     "evaluation",
 }
@@ -74,6 +75,28 @@ SAFE_POLICY_KEYS = frozenset(
         "mask_probability",
     }
 )
+TEXTURE_KEYS = frozenset(
+    {
+        "experiment_name",
+        "extractor_version",
+        "patch_size",
+        "patch_count",
+        "aggregation",
+        "fusion_dimension",
+        "variants",
+        "seeds",
+    }
+)
+EXPECTED_TEXTURE = {
+    "experiment_name": "clean_pilot_v1",
+    "extractor_version": "texture-patches-v1",
+    "patch_size": 112,
+    "patch_count": 4,
+    "aggregation": "masked_softmax_v1",
+    "fusion_dimension": 256,
+    "variants": ["global_only", "local_only", "global_local"],
+    "seeds": [42, 43, 44],
+}
 TASK8B_KEYS = frozenset(
     {
         "enabled",
@@ -369,6 +392,38 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("Auxiliary eligibility gap must be in [0, 1]")
     if auxiliary.get("workers", 0) <= 0:
         raise ConfigError("Auxiliary workers must be positive")
+
+    texture = _require_exact_keys(config["texture"], TEXTURE_KEYS, section="texture")
+    if texture["experiment_name"] != EXPECTED_TEXTURE["experiment_name"]:
+        raise ConfigError("Texture experiment_name must remain clean_pilot_v1")
+    if texture["extractor_version"] != EXPECTED_TEXTURE["extractor_version"]:
+        raise ConfigError("Texture extractor_version must remain texture-patches-v1")
+    if texture["aggregation"] != EXPECTED_TEXTURE["aggregation"]:
+        raise ConfigError("Texture aggregation must remain masked_softmax_v1")
+    for name, expected in (("patch_size", 112), ("patch_count", 4), ("fusion_dimension", 256)):
+        value = texture[name]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ConfigError(f"Texture {name} must be an integer")
+        if name == "patch_size" and value != expected:
+            raise ConfigError("Texture patch_size must remain 112")
+        if name == "patch_count" and value != expected:
+            raise ConfigError("Texture patch_count must remain 4")
+        if name == "fusion_dimension" and value <= 0:
+            raise ConfigError("Texture fusion_dimension must be positive")
+        if name == "fusion_dimension" and value != expected:
+            raise ConfigError("Texture fusion_dimension must remain 256")
+    if texture["variants"] != EXPECTED_TEXTURE["variants"]:
+        raise ConfigError("Texture variants must remain global_only/local_only/global_local")
+    if texture["seeds"] != EXPECTED_TEXTURE["seeds"]:
+        raise ConfigError("Texture seeds must remain 42/43/44")
+    if not isinstance(texture["variants"], list) or any(
+        not isinstance(value, str) for value in texture["variants"]
+    ):
+        raise ConfigError("Texture variants must be a list of strings")
+    if not isinstance(texture["seeds"], list) or any(
+        isinstance(value, bool) or not isinstance(value, int) for value in texture["seeds"]
+    ):
+        raise ConfigError("Texture seeds must be a list of integers")
 
     model = config["model"]
     if model.get("input_size") != 336:

@@ -160,6 +160,16 @@
     "max_eligibility_rate_gap": 0.05,
     "workers": 4
   },
+  "texture": {
+    "experiment_name": "clean_pilot_v1",
+    "extractor_version": "texture-patches-v1",
+    "patch_size": 112,
+    "patch_count": 4,
+    "aggregation": "masked_softmax_v1",
+    "fusion_dimension": 256,
+    "variants": ["global_only", "local_only", "global_local"],
+    "seeds": [42, 43, 44]
+  },
   "optimization": {
     "loss": "bce_with_logits",
     "optimizer": "adamw",

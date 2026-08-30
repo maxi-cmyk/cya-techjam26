@@ -19,6 +19,43 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(self.config["schema_version"], 1)
         self.assertEqual(self.config["runtime"]["platform"], "google_colab")
 
+    def test_texture_contract_is_frozen(self) -> None:
+        expected = {
+            "experiment_name": "clean_pilot_v1",
+            "extractor_version": "texture-patches-v1",
+            "patch_size": 112,
+            "patch_count": 4,
+            "aggregation": "masked_softmax_v1",
+            "fusion_dimension": 256,
+            "variants": ["global_only", "local_only", "global_local"],
+            "seeds": [42, 43, 44],
+        }
+        self.assertEqual(self.config["texture"], expected)
+
+    def test_texture_contract_rejects_invalid_values_and_keys(self) -> None:
+        expected = self.config.get("texture", {})
+        cases = {
+            "missing key": lambda c: c["texture"].pop("patch_size"),
+            "unknown key": lambda c: c["texture"].update(unexpected=True),
+            "boolean numeric": lambda c: c["texture"].update(patch_size=True),
+            "patch size": lambda c: c["texture"].update(patch_size=111),
+            "patch count": lambda c: c["texture"].update(patch_count=3),
+            "fusion dimension": lambda c: c["texture"].update(fusion_dimension=0),
+            "variant order": lambda c: c["texture"].update(variants=["local_only", "global_only", "global_local"]),
+            "variant duplicate": lambda c: c["texture"].update(variants=["global_only", "global_only", "global_local"]),
+            "seed order": lambda c: c["texture"].update(seeds=[43, 42, 44]),
+            "seed duplicate": lambda c: c["texture"].update(seeds=[42, 42, 44]),
+            "experiment name": lambda c: c["texture"].update(experiment_name="other"),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name):
+                candidate = copy.deepcopy(self.config)
+                if "texture" not in candidate:
+                    candidate["texture"] = copy.deepcopy(expected)
+                mutate(candidate)
+                with self.assertRaises(ConfigError):
+                    validate_config(candidate)
+
     def test_transform_chaining_cannot_be_enabled(self) -> None:
         candidate = copy.deepcopy(self.config)
         candidate["benchmark_transforms"]["allow_chaining"] = True
