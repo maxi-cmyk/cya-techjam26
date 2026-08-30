@@ -21,7 +21,8 @@ Task 3 transformed training and robustness evaluation are a separate continuatio
 - Primary global representation: frozen-CLIP RINE features from layers 6, 12, 18, and 24.
 - Local selector: the existing deterministic multi-scale Laplacian/Sobel selector.
 - Patch budget: at most four non-overlapping patches per image.
-- Source patch size: 336 by 336 pixels.
+- Source patch size: 112 by 112 pixels. The locked CLIP processor converts each
+  selected source patch to the model's 336 by 336 input.
 - Patch encoder: the same frozen CLIP vision backbone used by the global model.
 - Patch aggregation: one lightweight learned scorer followed by masked softmax and a weighted average.
 - Seeds: 42, 43, and 44 for every model variant.
@@ -29,7 +30,7 @@ Task 3 transformed training and robustness evaluation are a separate continuatio
 - Texture energy selects where to look and is never used as an authenticity score.
 - No CLIP parameter may become trainable.
 
-Images smaller than a 336-pixel patch are symmetrically zero-padded only as needed to form a valid patch. An odd padding remainder is placed on the right or bottom, matching the Task 3 preprocessing convention. Images that provide fewer than four valid patches retain only the available patches; the model masks absent positions and never duplicates patches to fill the budget.
+Images smaller than a 112-pixel source patch are symmetrically zero-padded only as needed to form a valid patch. An odd padding remainder is placed on the right or bottom, matching the Task 3 preprocessing convention. Images that provide fewer than four valid patches retain only the available patches; the model masks absent positions and never duplicates patches to fill the budget. A 336 by 336 source provides a three-by-three grid of nine candidates, allowing the energy selector to choose four genuinely higher-detail regions. Larger 168- or 336-pixel source patches would provide too few candidates on a 336-pixel image, while smaller 84-pixel patches would require more aggressive CLIP input upscaling.
 
 ## Architecture
 
