@@ -5,15 +5,21 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
 import statistics
 from pathlib import Path
 from typing import Any
 
 from cya_detector.evaluation.metrics import binary_metrics
 from cya_detector.predictions import PredictionRecord, read_predictions
+from cya_detector.training.texture_stage_d import APPROVED_MATCHING_POLICY, LOCKED_TEXTURE_SEEDS, LOCKED_TEXTURE_VARIANTS
 
 
-_VARIANTS = ("global_only", "local_only", "global_local")
+_VARIANTS = LOCKED_TEXTURE_VARIANTS
+_REQUIRED_RUN_ARTIFACTS = (
+    "checkpoints/best_clean.pt", "checkpoints/latest.pt", "predictions/selection_val.csv",
+    "reports/metrics.json", "reports/training_history.json", "metadata/run_metadata.json",
+)
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -37,6 +43,56 @@ def _prediction_path(root: Path, variant: str, seed: int) -> Path:
     return root / variant / f"seed_{seed}" / "predictions" / "selection_val.csv"
 
 
+def _require_finite(value: Any, *, name: str) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _require_finite(item, name=f"{name}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _require_finite(item, name=f"{name}[{index}]")
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"Texture gate refused non-finite {name}")
+
+
+def _require_measurement(report: dict[str, Any], *, name: str, keys: tuple[str, ...]) -> None:
+    for key in keys:
+        value = report.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or value < 0:
+            raise ValueError(f"Texture gate requires finite nonnegative {name} measurement: {key}")
+
+
+def _load_completed_run(root: Path, variant: str, seed: int) -> tuple[list[PredictionRecord], dict[str, Any], list[Path]]:
+    run_root = root / variant / f"seed_{seed}"
+    paths = [run_root / relative for relative in _REQUIRED_RUN_ARTIFACTS]
+    missing = [path for path in paths if not path.is_file()]
+    if missing:
+        raise ValueError(f"Texture gate requires completed run artifact: {missing[0]}")
+    try:
+        metadata = json.loads((run_root / "metadata" / "run_metadata.json").read_text(encoding="utf-8"))
+        metrics = json.loads((run_root / "reports" / "metrics.json").read_text(encoding="utf-8"))
+        json.loads((run_root / "reports" / "training_history.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Texture gate requires valid completed run artifacts: {run_root}") from exc
+    if (
+        metadata.get("status") != "completed" or metadata.get("variant") != variant
+        or metadata.get("seed") != seed or metadata.get("matching_policy") != APPROVED_MATCHING_POLICY
+    ):
+        raise ValueError(f"Texture gate requires completed fixed_q96 run metadata: {run_root}")
+    if metrics.get("selection_split") != "selection_val" or metrics.get("matching_policy") != APPROVED_MATCHING_POLICY:
+        raise ValueError(f"Texture gate requires fixed_q96 selection metrics: {run_root}")
+    if not isinstance(metrics.get("inference"), dict) or not isinstance(metrics.get("task4_extraction"), dict):
+        raise ValueError(f"Texture gate requires measured inference and Task 4 extraction reports: {run_root}")
+    _require_measurement(
+        metrics["inference"], name="inference", keys=("latency_seconds", "peak_memory_bytes")
+    )
+    _require_measurement(
+        metrics["task4_extraction"], name="Task 4 extraction",
+        keys=("elapsed_seconds", "peak_gpu_memory_bytes"),
+    )
+    _require_finite(metrics, name="run_metrics")
+    return _load_clean(run_root / "predictions" / "selection_val.csv"), metrics, paths
+
+
 def _load_clean(path: Path) -> list[PredictionRecord]:
     if not path.is_file():
         raise ValueError(f"Required texture prediction file is missing: {path}")
@@ -45,6 +101,10 @@ def _load_clean(path: Path) -> list[PredictionRecord]:
         raise ValueError("Texture gate requires clean selection_val prediction rows")
     if len({row.sample_id for row in rows}) != len(rows):
         raise ValueError("Texture gate requires unique prediction sample IDs")
+    if any(row.matching_policy != APPROVED_MATCHING_POLICY for row in rows):
+        raise ValueError("Texture gate requires fixed_q96 prediction provenance")
+    if any(not math.isfinite(row.logit) or not math.isfinite(row.probability) for row in rows):
+        raise ValueError("Texture gate refused non-finite prediction inputs")
     return rows
 
 
@@ -72,20 +132,32 @@ def compare_texture_pilot(
     """Compare global-only and global-local clean heads over the fixed nine-run pilot."""
 
     root = Path(experiment_root)
-    if not seeds or len(set(seeds)) != len(seeds):
-        raise ValueError("Texture gate requires unique configured seeds")
+    if tuple(seeds) != LOCKED_TEXTURE_SEEDS:
+        raise ValueError("Texture gate requires locked seeds 42, 43, 44")
     if not 0.0 <= max_per_class_regression < 1.0:
         raise ValueError("Texture gate regression tolerance must be in [0, 1)")
     per_seed: list[dict[str, Any]] = []
     input_paths: list[Path] = []
     corrected_total = introduced_total = 0
+    latency_rows: list[dict[str, Any]] = []
     for seed in seeds:
-        loaded = {variant: _load_clean(_prediction_path(root, variant, seed)) for variant in _VARIANTS}
-        input_paths.extend(_prediction_path(root, variant, seed) for variant in _VARIANTS)
+        completed = {variant: _load_completed_run(root, variant, seed) for variant in _VARIANTS}
+        loaded = {variant: value[0] for variant, value in completed.items()}
+        input_paths.extend(path for _, _, paths in completed.values() for path in paths)
+        for variant, (_, metrics, _) in completed.items():
+            latency_rows.append({
+                "variant": variant, "seed": seed,
+                "inference_latency_seconds": metrics["inference"]["latency_seconds"],
+                "inference_peak_memory_bytes": metrics["inference"]["peak_memory_bytes"],
+                "task4_extraction_elapsed_seconds": metrics["task4_extraction"].get("elapsed_seconds"),
+                "task4_extraction_peak_memory_bytes": metrics["task4_extraction"].get("peak_gpu_memory_bytes"),
+            })
         reference = loaded["global_only"]
         aligned = {variant: _aligned(records, reference) for variant, records in loaded.items()}
         global_metrics = binary_metrics(aligned["global_only"])
         fused_metrics = binary_metrics(aligned["global_local"])
+        _require_finite(global_metrics, name="global_only_metrics")
+        _require_finite(fused_metrics, name="global_local_metrics")
         corrected = sum(not _correct(left) and _correct(right) for left, right in zip(aligned["global_only"], aligned["global_local"], strict=True))
         introduced = sum(_correct(left) and not _correct(right) for left, right in zip(aligned["global_only"], aligned["global_local"], strict=True))
         corrected_total += corrected
@@ -124,7 +196,7 @@ def compare_texture_pilot(
     latency_path = comparison / "latency_comparison.json"
     _atomic_json(comparison_path, report)
     _atomic_csv(per_seed_path, per_seed)
-    _atomic_json(latency_path, {"status": "not_measured_from_prediction_artifacts", "variants": list(_VARIANTS)})
+    _atomic_json(latency_path, {"status": "completed", "measurements": latency_rows})
     manifest = {
         "status": "completed", "decision": decision,
         "files": [

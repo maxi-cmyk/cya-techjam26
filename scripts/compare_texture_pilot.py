@@ -15,13 +15,13 @@ if str(SRC_ROOT) not in sys.path:
 
 from cya_detector.config import load_config  # noqa: E402
 from cya_detector.evaluation.texture_gate import compare_texture_pilot  # noqa: E402
+from cya_detector.training.texture_stage_d import LOCKED_TEXTURE_SEEDS  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", type=Path, default=Path("artifacts/task9"))
     parser.add_argument("--config", type=Path, default=Path("configs/colab.json"))
-    parser.add_argument("--seeds", nargs="+", type=int)
     return parser.parse_args()
 
 
@@ -30,7 +30,7 @@ def main() -> int:
     config = load_config(args.config)
     report = compare_texture_pilot(
         experiment_root=args.output_root / config["texture"]["experiment_name"],
-        seeds=tuple(args.seeds or config["texture"]["seeds"]),
+        seeds=LOCKED_TEXTURE_SEEDS,
         max_per_class_regression=config["evaluation"]["max_per_class_accuracy_regression"],
     )
     print(json.dumps(report, indent=2, sort_keys=True))

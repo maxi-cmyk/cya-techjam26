@@ -24,6 +24,9 @@ from cya_detector.training.rine_stage_b import extract_rine_features
 
 
 _ALLOWED_SPLITS = {"seed_train", "selection_val"}
+APPROVED_MATCHING_POLICY = "fixed_q96"
+LOCKED_TEXTURE_VARIANTS = ("global_only", "local_only", "global_local")
+LOCKED_TEXTURE_SEEDS = (42, 43, 44)
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,7 @@ class CachedTextureFeatures:
     example: ManifestExample
     global_cache_path: Path
     patch_cache_path: Path
+    matching_policy: str = ""
 
 
 def _contract(
@@ -267,7 +271,10 @@ def extract_texture_features(
             "patch_boxes": contract["patch_boxes"], "cache_contract": contract,
         })
 
-    rows = [CachedTextureFeatures(example, global_path_by_sample[example.sample_id], path) for example, path, _, _ in patch_rows]
+    rows = [
+        CachedTextureFeatures(example, global_path_by_sample[example.sample_id], path, matching_policy)
+        for example, path, _, _ in patch_rows
+    ]
     elapsed = time.perf_counter() - started
     total_bytes = sum(row.global_cache_path.stat().st_size + row.patch_cache_path.stat().st_size for row in rows)
     invalid_global_ids = {row.example.sample_id for row in invalid_globals}
@@ -313,6 +320,41 @@ def _atomic_checkpoint(path: Path, *, model: Any, state: dict[str, Any]) -> None
     temporary.replace(path)
 
 
+def _require_finite(value: Any, *, name: str) -> None:
+    """Reject non-finite numerical data before it can become a published artifact."""
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _require_finite(item, name=f"{name}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _require_finite(item, name=f"{name}[{index}]")
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"Texture training refused non-finite {name}")
+
+
+def _replace_published_file(source: Path, destination: Path) -> None:
+    """Atomically replace one completed artifact where the filesystem supports it."""
+
+    source.replace(destination)
+
+
+def _publish_staged_run(staging: Path, run_root: Path) -> None:
+    """Publish a staged overwrite file-by-file, keeping a complete canonical run present."""
+
+    if not run_root.exists():
+        staging.replace(run_root)
+        return
+    staged_files = sorted(path for path in staging.rglob("*") if path.is_file())
+    metadata = staging / "metadata" / "run_metadata.json"
+    for source in [path for path in staged_files if path != metadata] + [metadata]:
+        destination = run_root / source.relative_to(staging)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _replace_published_file(source, destination)
+    import shutil
+    shutil.rmtree(staging)
+
+
 def _load_cached_texture_rows(rows: list[CachedTextureFeatures]) -> tuple[Any, Any, Any, Any, list[CachedTextureFeatures], list[CachedTextureFeatures]]:
     """Load each frozen cache exactly once after validating its clean-only contract."""
 
@@ -323,6 +365,8 @@ def _load_cached_texture_rows(rows: list[CachedTextureFeatures]) -> tuple[Any, A
         raise ValueError("Texture training accepts only seed_train and selection_val rows")
     if any(row.example.image_view != "matched_clean" or row.example.transform != "clean" for row in rows):
         raise ValueError("Texture training accepts only matched-clean clean rows")
+    if any(row.matching_policy != APPROVED_MATCHING_POLICY for row in rows):
+        raise ValueError("Texture training requires fixed_q96 cached provenance")
     train_rows = [row for row in rows if row.example.split == "seed_train"]
     selection_rows = [row for row in rows if row.example.split == "selection_val"]
     if not train_rows or not selection_rows:
@@ -348,7 +392,7 @@ def _load_cached_texture_rows(rows: list[CachedTextureFeatures]) -> tuple[Any, A
             or not global_features.dtype.is_floating_point
             or not patch_features.dtype.is_floating_point
             or not bool(torch.isfinite(global_features).all())
-            or not bool(torch.isfinite(patch_features[patch_mask]).all())
+            or not bool(torch.isfinite(patch_features).all())
             or not bool(patch_mask.any())
         ):
             raise ValueError("Frozen texture caches must be shape-valid with non-finite values refused")
@@ -392,11 +436,9 @@ def train_texture_head(
 
     torch, _, _ = require_ml_dependencies()
     texture_config = run_configuration.get("texture", {})
-    configured_variants = tuple(texture_config.get("variants", TEXTURE_VARIANTS))
-    configured_seeds = tuple(texture_config.get("seeds", (42, 43, 44)))
-    if variant not in configured_variants or variant not in TEXTURE_VARIANTS:
+    if variant not in LOCKED_TEXTURE_VARIANTS:
         raise ValueError("Texture training requires a configured texture variant")
-    if seed not in configured_seeds:
+    if seed not in LOCKED_TEXTURE_SEEDS:
         raise ValueError("Texture training requires a configured texture seed")
     required = (
         "device", "learning_rate", "weight_decay", "warmup_fraction", "max_epochs",
@@ -426,7 +468,7 @@ def train_texture_head(
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.use_deterministic_algorithms(True, warn_only=False)
     layer_count, global_dimension = train_global.shape[1:]
     _, patch_dimension = train_patch.shape[1:]
     fusion_dimension = int(texture_config.get("fusion_dimension", 256))
@@ -456,6 +498,7 @@ def train_texture_head(
     best_accuracy = -math.inf
     best_predictions: list[PredictionRecord] = []
     best_metrics: dict[str, Any] | None = None
+    best_inference: dict[str, Any] | None = None
     history: list[dict[str, Any]] = []
     patience = 0
     try:
@@ -465,6 +508,8 @@ def train_texture_head(
             loss_total = 0.0
             for step, (global_features, patch_features, patch_mask, targets) in enumerate(loader, start=1):
                 logits = model(global_features.to(device), patch_features.to(device), patch_mask.to(device)).squeeze(1)
+                if not bool(torch.isfinite(logits).all()):
+                    raise ValueError("Texture training refused non-finite training logits")
                 loss = criterion(logits, targets.to(device))
                 if not bool(torch.isfinite(loss)):
                     raise ValueError("Texture training refused a non-finite loss")
@@ -477,9 +522,19 @@ def train_texture_head(
                     optimizer.zero_grad(set_to_none=True)
 
             model.eval()
+            if device.startswith("cuda") and torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
+            inference_started = time.perf_counter()
             with torch.inference_mode():
                 logits = model(selection_global.to(device), selection_patch.to(device), selection_mask.to(device)).squeeze(1).cpu()
                 probabilities = torch.sigmoid(logits)
+            inference = {
+                "sample_count": len(selection_rows),
+                "latency_seconds": time.perf_counter() - inference_started,
+                "peak_memory_bytes": int(torch.cuda.max_memory_allocated()) if device.startswith("cuda") and torch.cuda.is_available() else 0,
+            }
+            if not bool(torch.isfinite(logits).all()) or not bool(torch.isfinite(probabilities).all()):
+                raise ValueError("Texture training refused non-finite validation logits or probabilities")
             predictions = [
                 PredictionRecord(
                     sample_id=row.example.sample_id, source_id=row.example.source_id,
@@ -491,12 +546,13 @@ def train_texture_head(
                 for row, logit, probability in zip(selection_rows, logits.tolist(), probabilities.tolist(), strict=True)
             ]
             metrics = evaluate_predictions(predictions, threshold=float(optimization["threshold"]))
+            _require_finite(metrics, name="metrics")
             accuracy = metrics["clean"]["accuracy"]
             history.append({"epoch": epoch, "training_loss": loss_total / len(loader), "clean_accuracy": accuracy})
             state = {"stage": "texture_stage_d", "variant": variant, "seed": seed, "epoch": epoch}
             _atomic_checkpoint(staging / "checkpoints" / "latest.pt", model=model, state=state)
             if accuracy > best_accuracy:
-                best_accuracy, best_predictions, best_metrics = accuracy, predictions, metrics
+                best_accuracy, best_predictions, best_metrics, best_inference = accuracy, predictions, metrics, inference
                 patience = 0
                 _atomic_checkpoint(staging / "checkpoints" / "best_clean.pt", model=model, state=state)
             else:
@@ -504,28 +560,25 @@ def train_texture_head(
                 if patience >= int(optimization["early_stopping_patience"]):
                     break
 
-        if best_metrics is None:
+        if best_metrics is None or best_inference is None:
             raise ValueError("Texture training produced no selection metrics")
+        extraction_report = optimization.get("task4_extraction_report")
+        if not isinstance(extraction_report, dict):
+            raise ValueError("Texture training requires the Task 4 extraction report")
+        _require_finite(extraction_report, name="task4_extraction")
         _atomic_predictions(staging / "predictions" / "selection_val.csv", best_predictions)
-        _atomic_json(staging / "reports" / "metrics.json", {"selection_split": "selection_val", **best_metrics})
+        _atomic_json(staging / "reports" / "metrics.json", {
+            "selection_split": "selection_val", "matching_policy": APPROVED_MATCHING_POLICY,
+            "inference": best_inference, "task4_extraction": extraction_report, **best_metrics,
+        })
         _atomic_json(staging / "reports" / "training_history.json", {"history": history})
         _atomic_json(staging / "metadata" / "run_metadata.json", {
             "status": "completed", "stage": "texture_stage_d", "variant": variant, "seed": seed,
+            "matching_policy": APPROVED_MATCHING_POLICY,
             "allowed_splits": sorted(_ALLOWED_SPLITS), "run_configuration": run_configuration,
             "optimization": optimization, "accumulation_steps": accumulation_steps, "warmup_steps": warmup_steps,
         })
-        if run_root.exists():
-            import shutil
-            previous = run_root.parent / f".{run_root.name}.previous-{uuid.uuid4().hex}"
-            run_root.replace(previous)
-            try:
-                staging.replace(run_root)
-            except Exception:
-                previous.replace(run_root)
-                raise
-            shutil.rmtree(previous)
-        else:
-            staging.replace(run_root)
+        _publish_staged_run(staging, run_root)
     except Exception:
         import shutil
         shutil.rmtree(staging, ignore_errors=True)

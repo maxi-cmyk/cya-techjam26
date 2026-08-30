@@ -69,11 +69,15 @@ class TextureTrainingTests(unittest.TestCase):
                 },
                 patch_path,
             )
-            rows.append(CachedTextureFeatures(example, global_path, patch_path))
+            rows.append(CachedTextureFeatures(example, global_path, patch_path, "fixed_q96"))
         return rows
 
-    def _train(self, *, root: Path, rows: list[CachedTextureFeatures] | None = None, variant: str = "global_local", seed: int = 42, overwrite: bool = False):
+    def _train(self, *, root: Path, rows: list[CachedTextureFeatures] | None = None, variant: str = "global_local", seed: int = 42, overwrite: bool = False, **changes):
         from cya_detector.training.texture_stage_d import train_texture_head
+
+        task4_extraction_report = changes.pop(
+            "task4_extraction_report", {"elapsed_seconds": 0.01, "peak_gpu_memory_bytes": 0}
+        )
 
         return train_texture_head(
             rows=self.rows if rows is None else rows,
@@ -91,6 +95,8 @@ class TextureTrainingTests(unittest.TestCase):
             physical_batch_size=2,
             effective_batch_size=2,
             threshold=0.5,
+            task4_extraction_report=task4_extraction_report,
+            **changes,
         )
 
     def test_every_configured_head_run_publishes_a_complete_atomic_artifact_set(self) -> None:
@@ -126,13 +132,27 @@ class TextureTrainingTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(first.read_bytes()).hexdigest(), hashlib.sha256(second.read_bytes()).hexdigest())
         self._train(root=first_root, overwrite=True)
 
+    def test_failed_overwrite_keeps_the_completed_canonical_run(self) -> None:
+        output_root = self.root / "interrupted-overwrite"
+        first = self._train(root=output_root)
+        metadata_path = Path(first["run_root"]) / "metadata" / "run_metadata.json"
+        original_metadata = metadata_path.read_bytes()
+        with patch(
+            "cya_detector.training.texture_stage_d._replace_published_file",
+            side_effect=OSError("interrupted replacement"),
+        ):
+            with self.assertRaisesRegex(OSError, "interrupted replacement"):
+                self._train(root=output_root, overwrite=True)
+        self.assertTrue(metadata_path.is_file())
+        self.assertEqual(metadata_path.read_bytes(), original_metadata)
+
     def test_rejects_nonfinite_features_before_creating_a_run_directory(self) -> None:
         output_root = self.root / "nonfinite-runs"
         with self.assertRaisesRegex(ValueError, "non-finite"):
             self._train(root=output_root, rows=self._cached_rows(nonfinite=True))
         self.assertFalse(output_root.exists())
 
-    def test_refuses_a_nonfinite_training_loss_without_publishing(self) -> None:
+    def test_refuses_nonfinite_model_outputs_without_publishing(self) -> None:
         class NaNHead(torch.nn.Module):
             def __init__(self) -> None:
                 super().__init__()
@@ -143,7 +163,7 @@ class TextureTrainingTests(unittest.TestCase):
 
         output_root = self.root / "nan-loss-runs"
         with patch("cya_detector.training.texture_stage_d.build_texture_head", return_value=NaNHead()):
-            with self.assertRaisesRegex(ValueError, "non-finite loss"):
+            with self.assertRaisesRegex(ValueError, "non-finite training logits"):
                 self._train(root=output_root)
         self.assertFalse((output_root / "global_local" / "seed_42").exists())
         self.assertFalse(any(".tmp" in path.name for path in output_root.rglob("*")))
@@ -163,6 +183,7 @@ class TextureTrainingTests(unittest.TestCase):
             ),
             global_cache_path=invalid[0].global_cache_path,
             patch_cache_path=invalid[0].patch_cache_path,
+            matching_policy=invalid[0].matching_policy,
         )
         with self.assertRaisesRegex(ValueError, "matched-clean"):
             self._train(root=output_root, rows=invalid)
@@ -176,6 +197,57 @@ class TextureTrainingTests(unittest.TestCase):
             self._train(root=self.root / "bad-variant", variant="unknown")
         with self.assertRaisesRegex(ValueError, "configured texture seed"):
             self._train(root=self.root / "bad-seed", seed=45)
+
+    def test_public_boundary_keeps_the_locked_seed_set_even_if_caller_configuration_changes(self) -> None:
+        original = self.configuration
+        self.configuration = {"texture": {"variants": ["global_local"], "seeds": [45], "fusion_dimension": 4}}
+        try:
+            with self.assertRaisesRegex(ValueError, "configured texture seed"):
+                self._train(root=self.root / "caller-seed", seed=45)
+        finally:
+            self.configuration = original
+
+    def test_requires_fixed_q96_cached_provenance_before_loading_features(self) -> None:
+        rows = list(self.rows)
+        object.__setattr__(rows[0], "matching_policy", "uniform_q95_q100")
+        with self.assertRaisesRegex(ValueError, "fixed_q96"):
+            self._train(root=self.root / "uniform", rows=rows)
+
+    def test_missing_cached_provenance_fails_closed(self) -> None:
+        rows = [
+            CachedTextureFeatures(row.example, row.global_cache_path, row.patch_cache_path)
+            for row in self.rows
+        ]
+        with self.assertRaisesRegex(ValueError, "fixed_q96"):
+            self._train(root=self.root / "missing-policy", rows=rows)
+
+    def test_rejects_nonfinite_masked_cache_entries(self) -> None:
+        rows = self._cached_rows()
+        payload = torch.load(rows[0].patch_cache_path, weights_only=True)
+        payload["patch_features"][2, 0] = torch.nan
+        torch.save(payload, rows[0].patch_cache_path)
+        with self.assertRaisesRegex(ValueError, "non-finite"):
+            self._train(root=self.root / "masked-nonfinite", rows=rows)
+
+    def test_records_real_inference_measurements_and_task4_extraction_report(self) -> None:
+        summary = self._train(
+            root=self.root / "measured",
+            task4_extraction_report={"elapsed_seconds": 1.25, "peak_gpu_memory_bytes": 0},
+        )
+        metrics = json.loads((Path(summary["run_root"]) / "reports" / "metrics.json").read_text())
+        self.assertGreater(metrics["inference"]["latency_seconds"], 0.0)
+        self.assertGreaterEqual(metrics["inference"]["peak_memory_bytes"], 0)
+        self.assertEqual(metrics["task4_extraction"]["elapsed_seconds"], 1.25)
+
+    def test_cuda_determinism_fails_closed_when_torch_cannot_guarantee_it(self) -> None:
+        def deterministic_only(enabled: bool, *, warn_only: bool) -> None:
+            if warn_only:
+                return
+            raise RuntimeError("determinism unavailable")
+
+        with patch("torch.use_deterministic_algorithms", side_effect=deterministic_only):
+            with self.assertRaisesRegex(RuntimeError, "determinism unavailable"):
+                self._train(root=self.root / "determinism")
 
 
 if __name__ == "__main__":
