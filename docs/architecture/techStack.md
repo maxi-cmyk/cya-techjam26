@@ -102,16 +102,23 @@ The binary head is the only classification head. Face-, edit-, and mixed-content
 | Dataset | Role |
 |---|---|
 | `saberzl/SID_Set` (Hugging Face) | Synthetic + real source pool |
+| PREMIER v3 N1/N2 accessible; N3 optional (University of Florence/CSP Lab, CC BY-SA 4.0) | Task 8B native authentic pool with device-grouped flat/natural images; exclude altered/social derivatives |
 | CIFAKE (Kaggle, `birdy654/cifake-real-and-ai-generated-synthetic-images`) | Low-resolution stress test/backbone smoke test only; its 32x32 sources are not eligible for PRNU, optics, CFA, or primary texture features |
 | WildFake (ModelScope) | Synthetic + real source pool (translate via platform's translation button before use) |
 | COCO val2017 (subset) | Non-AIGC portion of the **validation-only** benchmark (not for training) |
 | DALL·E Advanced (subset) | AIGC portion of the **validation-only** benchmark (not for training) |
-| GenImage / AIGCDetectBenchmark | Canonical external training/eval reference sets |
+| GenImage (AI branches only for Task 8B; CC BY-NC-SA 4.0) / AIGCDetectBenchmark | Canonical external training/eval reference sets; current Task 8B GenImage use is non-commercial only |
 | Chameleon (`AIDE` repo companion, ~26K images) | Stress-test benchmark — human-Turing-test-passing AI fakes; expect ~70% accuracy even for good detectors |
 
 Mixed-origin, AI-edited, face-swapped, composited, and ambiguous-provenance samples must be filtered out of both labels.
 
 The current repository does not contain these datasets, model weights, a manifest, or a measured hardware profile. Their presence in this table documents intended sources, not current training readiness. SID_Set's tampered class must be discarded rather than merged into the synthetic label. Low-level forensic fusion must be trained only on samples that meet a predeclared feature-support rule, with the eligibility mask balanced and audited across labels. Resolution alone is insufficient for PRNU/optics eligibility: the authentic subset must preserve plausible native camera traces rather than only high-resolution, platform-processed pixels.
+
+The Task 8B importer and split/audit contract are implemented, but the external
+PREMIER and GenImage bytes still require manual download and Drive staging. See
+[Task 8B dataset](../data/task8b_dataset.md). The importer records verified
+license identifiers and rejects GenImage real/nature rows, altered PREMIER rows,
+and missing device/generator group metadata.
 
 ## 6. Dataset Normalization and Transformation Pipeline
 

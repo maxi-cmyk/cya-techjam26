@@ -86,6 +86,36 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             validate_config(candidate)
 
+    def test_task8b_reuses_existing_roots_and_is_noncommercial(self) -> None:
+        task8b = self.config["task8b"]
+        self.assertEqual(task8b["source_relative_path"], "raw/task8b")
+        self.assertEqual(task8b["artifact_relative_path"], "task8b")
+        self.assertEqual(task8b["assumed_use"], "noncommercial_research_hackathon")
+        self.assertTrue(task8b["allow_noncommercial_genimage"])
+
+    def test_task8b_paths_must_be_relative(self) -> None:
+        candidate = copy.deepcopy(self.config)
+        candidate["task8b"]["artifact_relative_path"] = "/tmp/task8b"
+        with self.assertRaises(ConfigError):
+            validate_config(candidate)
+
+    def test_task8b_split_contract_is_separate(self) -> None:
+        candidate = copy.deepcopy(self.config)
+        candidate["task8b"]["split_fractions"]["heldout_test"] = 0.2
+        with self.assertRaises(ConfigError):
+            validate_config(candidate)
+
+    def test_task8b_readiness_thresholds_are_validated(self) -> None:
+        candidate = copy.deepcopy(self.config)
+        candidate["task8b"]["readiness"]["max_nuisance_balanced_accuracy"] = 1.1
+        with self.assertRaises(ConfigError):
+            validate_config(candidate)
+
+        candidate = copy.deepcopy(self.config)
+        candidate["task8b"]["readiness"]["minimum_authentic_devices"] = 0
+        with self.assertRaises(ConfigError):
+            validate_config(candidate)
+
     def test_task3_contract_is_frozen(self) -> None:
         config = load_config(CONFIG_PATH)
         engine = config["transform_engine"]

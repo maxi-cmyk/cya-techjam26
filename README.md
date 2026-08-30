@@ -38,3 +38,15 @@ See [PRD.md](docs/product/PRD.md) for requirements, [design.md](docs/architectur
 ## Colab execution
 
 Run `notebooks/00_colab_setup.ipynb`, then `01_task2_data_contract.ipynb`, and finally `02_stage_a_clip.ipynb`. The Stage A notebook uses the resolved CLIP commit in every embedding-cache key, trains only the binary head, compares both Task 2 matching policies over seeds 42/43/44, and keeps `final_test` locked. Clean reports are available immediately; the locked 50/50 score and robustness checkpoints remain unavailable until Task 3 supplies the independent transform cells.
+
+Task 8B uses a separate licensed native-camera/synthetic manifest under the same
+`hackathon_data` and artifact roots. It does not replace SID_Set or retrain the
+existing backbone. See [Task 8B dataset](docs/data/task8b_dataset.md) for the
+verified sources, non-commercial GenImage assumption, storage layout, inventory
+schema, grouped-split rules, and manual Drive staging boundary.
+
+The completed local Task 8B pilot normalizes 1,164 eligible rows to identical
+256 px uncompressed TIFF views and passes the nuisance gate at 0.50 balanced
+accuracy. PRNU fails its independent device-signal gate (AUC 0.538; minimum
+0.60), CA lacks calibration coverage, and the recorded outcome is no physical
+feature retained and no RINE fusion training.

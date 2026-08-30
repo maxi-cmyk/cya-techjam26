@@ -1,4 +1,4 @@
-.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare
+.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare task8b-extract-genimage task8b-inventory task8b-manifest task8b-readiness task8b-matched task8b-prepare task8b-prnu-references task8b-prnu-validate task8b-decision
 
 DATA_ROOT ?= /content/hackathon_data
 ARTIFACT_ROOT ?= artifacts
@@ -97,3 +97,37 @@ task8-train:
 
 task8-compare:
 	python scripts/compare_color_variants.py --task8-root $(ARTIFACT_ROOT)/task8 --output $(ARTIFACT_ROOT)/task8/color_comparison.json
+
+TASK8B_DATA_ROOT ?= $(DATA_ROOT)/raw/task8b
+TASK8B_ARTIFACT_ROOT ?= $(ARTIFACT_ROOT)/task8b
+TASK8B_MANIFEST ?= $(TASK8B_ARTIFACT_ROOT)/manifests/source_manifest_split.csv
+GENIMAGE_ARCHIVE ?=
+GENIMAGE_GENERATOR ?=
+GENIMAGE_LIMIT ?= 200
+
+task8b-extract-genimage:
+	python scripts/extract_task8b_genimage_sample.py --archive "$(GENIMAGE_ARCHIVE)" --generator "$(GENIMAGE_GENERATOR)" --output-root $(TASK8B_DATA_ROOT)/genimage_ai --report "$(TASK8B_ARTIFACT_ROOT)/audits/extract_$(GENIMAGE_GENERATOR).json" --limit $(GENIMAGE_LIMIT)
+
+task8b-inventory:
+	python scripts/prepare_task8b_inventory.py --task8b-root $(TASK8B_DATA_ROOT) --output $(TASK8B_DATA_ROOT)/sources.csv --report $(TASK8B_ARTIFACT_ROOT)/audits/inventory_preparation.json --generators ADM GLIDE Midjourney Wukong
+
+task8b-manifest:
+	python scripts/build_task8b_manifest.py --dataset-root $(TASK8B_DATA_ROOT) --inventory $(TASK8B_DATA_ROOT)/sources.csv --manifest $(TASK8B_MANIFEST) --audit-report $(TASK8B_ARTIFACT_ROOT)/audits/source_audit.json --split-report $(TASK8B_ARTIFACT_ROOT)/audits/split_report.json
+
+task8b-readiness:
+	python scripts/audit_task8b_readiness.py --manifest $(TASK8B_MANIFEST) --output $(TASK8B_ARTIFACT_ROOT)/audits/readiness_report.json --require-source-ready
+
+task8b-matched:
+	python scripts/build_task8b_matched_views.py --source-manifest $(TASK8B_MANIFEST) --output-root $(TASK8B_ARTIFACT_ROOT)/matched_views/images --output-manifest $(TASK8B_ARTIFACT_ROOT)/manifests/matched_manifest.csv --report $(TASK8B_ARTIFACT_ROOT)/audits/matched_view_report.json --size 256 --perceptual-distance 1 --overwrite
+	python scripts/audit_task8b_readiness.py --manifest $(TASK8B_ARTIFACT_ROOT)/manifests/matched_manifest.csv --output $(TASK8B_ARTIFACT_ROOT)/audits/matched_readiness_report.json --require-training-ready
+
+task8b-prepare: task8b-manifest task8b-readiness
+
+task8b-prnu-references: task8b-readiness
+	python scripts/build_task8b_prnu_references.py --manifest $(TASK8B_MANIFEST) --output-root $(TASK8B_ARTIFACT_ROOT)/fingerprints --report $(TASK8B_ARTIFACT_ROOT)/audits/prnu_reference_report.json
+
+task8b-prnu-validate:
+	python scripts/validate_task8b_prnu.py --manifest $(TASK8B_MANIFEST) --output $(TASK8B_ARTIFACT_ROOT)/audits/prnu_signal_validation.json
+
+task8b-decision:
+	python scripts/decide_task8b.py --matched-readiness $(TASK8B_ARTIFACT_ROOT)/audits/matched_readiness_report.json --prnu-validation $(TASK8B_ARTIFACT_ROOT)/audits/prnu_signal_validation.json --output $(TASK8B_ARTIFACT_ROOT)/reports/retention_decision.json

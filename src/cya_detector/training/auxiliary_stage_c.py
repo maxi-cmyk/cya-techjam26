@@ -30,6 +30,9 @@ BASE_FIELDS = [
     "sample_id", "source_id", "parent_id", "image_path", "sha256", "label", "split",
     "matching_policy", "transform", "transform_parameter", "dataset_name",
     "generator_name", "generator_checkpoint", "capture_source", "image_view",
+    "license_status", "license_verified", "source_subset", "processing_state",
+    "physical_source_status", "device_id", "camera_make", "camera_model",
+    "lens_model", "focal_length", "split_group_id",
     "width", "height", "file_size", "normalization_quality", "cache_key",
     "feature_valid", "feature_error", "rgb_valid", "rgb_confidence", "lab_valid",
     "lab_confidence", "prnu_valid", "prnu_confidence", "prnu_eligible",
@@ -55,11 +58,22 @@ def _sha256_file(path: Path) -> str:
 
 
 def physical_feature_eligible(row: dict[str, str], *, min_dimension: int) -> bool:
-    """Apply label-independent native-view support rules."""
+    """Apply label-independent native/export provenance and resolution rules."""
 
     width = int(float(row.get("original_width") or row.get("width") or 0))
     height = int(float(row.get("original_height") or row.get("height") or 0))
-    return row.get("image_view") == "source_original" and min(width, height) >= min_dimension
+    if row.get("image_view") != "source_original" or min(width, height) < min_dimension:
+        return False
+    task8b_dataset = row.get("dataset_name") in {"premier", "genimage"}
+    provenance = row.get("physical_source_status") or row.get("processing_state") or ""
+    allowed = {
+        "native_camera",
+        "minimally_processed_camera",
+        "native_generator_export",
+    }
+    if task8b_dataset:
+        return row.get("license_verified") == "true" and provenance in allowed
+    return not provenance or provenance in allowed
 
 
 def _merge_results(results: list[AuxiliaryFeatureResult]) -> AuxiliaryFeatureResult:

@@ -52,6 +52,7 @@ The named datasets do not support every feature equally:
 | Data source | Suitable use | Restriction |
 |---|---|---|
 | SID_Set | Primary high-resolution binary pool after filtering | Keep only authentic and fully synthetic rows; exclude its tampered class entirely |
+| PREMIER v3 N1/N2 accessible; N3 optional | Task 8B native authentic pool for device-grouped PRNU work | Accept only licensed native/minimally processed images with device IDs; preserve RAW/HEIC but defer them until decoding is pinned |
 | GenImage | Binary training/evaluation and generator holdouts | Preserve generator subsets and source grouping; do not treat multiple derivatives as independent sources |
 | WildFake | Generator/architecture/version stratification | Acquire and verify the exact released hierarchy/licenses, then retain only fully synthetic and authentic branches |
 | CIFAKE | Low-resolution stress test or quick backbone smoke test | Its 32x32 sources are ineligible for PRNU, chromatic aberration, radial distortion, CFA periodicity, and primary texture training; upscaling does not recreate those signals |
@@ -61,6 +62,30 @@ The named datasets do not support every feature equally:
 Every row must include a per-feature eligibility mask derived from source resolution, provenance, processing history when known, and extractor support. Eligibility rules are fixed before model comparison and applied identically to both labels. Low-resolution images may still train the CLIP head, but they must not teach the fusion head that a missing physical feature implies either class.
 
 High resolution does not prove that sensor or lens traces survived. Social-media and ImageNet-derived authentic files may already have been resized, denoised, sharpened, corrected, or re-encoded. Until a provenance-preserving authentic subset with near-native camera exports is identified, PRNU and optics are **unvalidated research ablations**, not dependable training signals. A classifier improvement on source-confounded web data is insufficient evidence to retain them.
+
+For Task 8B specifically, accessible PREMIER N1/N2 supplies the authentic side
+(N3 may be added if it later becomes accessible under the same license), and only
+GenImage `ai` branches supply the synthetic side. GenImage `nature` rows are not
+eligible because they lack the device-grouped native provenance required by this
+track. This selection assumes non-commercial hackathon/research use under
+GenImage's CC BY-NC-SA 4.0 terms. Task 8B uses separate grouped splits and never
+relabels or merges its held-out rows into the competition `final_test`.
+
+Task 8B source readiness and training readiness are separate gates. A valid
+native collection may pass license, provenance, device, generator, and leakage
+checks while still failing the nuisance-only classifier threshold. In that case,
+reference fingerprints may be prepared for controlled PRNU comparison, but no
+binary physical-fusion head may be fitted until label-independent export matching
+reduces the nuisance balanced accuracy to the predeclared limit.
+
+The completed local Task 8B pilot meets that matched-view gate at 0.50 balanced
+accuracy using 256 px crop-only, uncompressed RGB TIFF views. This does not by
+itself authorize fusion training. The separate seed-train-only device validation
+reaches AUC 0.538 for multi-image fingerprints and 0.543 for the single-image
+proxy, both below the frozen 0.60 minimum. CA is also ineligible because calibrated
+lens/focal/edge-rich coverage is absent. Consequently no PRNU/CA projection or
+fusion weights are trained, RINE remains unchanged, and no physical feature is
+retained.
 
 ### 1.3 Current readiness status
 

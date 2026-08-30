@@ -17,6 +17,7 @@ REQUIRED_SECTIONS = {
     "runtime",
     "paths",
     "dataset",
+    "task8b",
     "model",
     "preprocessing",
     "transform_engine",
@@ -71,6 +72,34 @@ SAFE_POLICY_KEYS = frozenset(
         "mask_patch_size",
         "mask_max_fraction",
         "mask_probability",
+    }
+)
+TASK8B_KEYS = frozenset(
+    {
+        "enabled",
+        "assumed_use",
+        "allow_noncommercial_genimage",
+        "source_relative_path",
+        "inventory_filename",
+        "premier_relative_path",
+        "genimage_ai_relative_path",
+        "artifact_relative_path",
+        "supported_source_extensions",
+        "minimum_images_per_device",
+        "readiness",
+        "split_fractions",
+    }
+)
+TASK8B_READINESS_KEYS = frozenset(
+    {
+        "minimum_rows_per_label",
+        "minimum_authentic_devices",
+        "minimum_generator_families",
+        "minimum_prnu_training_devices",
+        "max_label_count_ratio",
+        "max_nuisance_balanced_accuracy",
+        "minimum_ca_metadata_fraction",
+        "minimum_ca_edge_rich_fraction",
     }
 )
 
@@ -160,6 +189,63 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("Dataset split fractions must sum to 1.0")
     if config["dataset"].get("c2pa_scan_required_before_derivation") is not True:
         raise ConfigError("C2PA source scanning must be required before derivation")
+
+    task8b = _require_exact_keys(config["task8b"], TASK8B_KEYS, section="task8b")
+    for name in ("enabled", "allow_noncommercial_genimage"):
+        if not isinstance(task8b[name], bool):
+            raise ConfigError(f"task8b.{name} must be boolean")
+    if task8b["assumed_use"] != "noncommercial_research_hackathon":
+        raise ConfigError("Task 8B currently supports only non-commercial research use")
+    for name in (
+        "source_relative_path",
+        "premier_relative_path",
+        "genimage_ai_relative_path",
+        "artifact_relative_path",
+    ):
+        value = Path(task8b[name])
+        if value.is_absolute() or ".." in value.parts:
+            raise ConfigError(f"task8b.{name} must be a safe relative path")
+    if Path(task8b["inventory_filename"]).name != task8b["inventory_filename"]:
+        raise ConfigError("task8b.inventory_filename must be a filename")
+    extensions = task8b["supported_source_extensions"]
+    if not isinstance(extensions, list) or not extensions or any(
+        not isinstance(value, str) or not value.startswith(".") for value in extensions
+    ):
+        raise ConfigError("Task 8B supported extensions must be a non-empty list")
+    minimum_images = task8b["minimum_images_per_device"]
+    if isinstance(minimum_images, bool) or not isinstance(minimum_images, int) or minimum_images < 2:
+        raise ConfigError("Task 8B requires at least two images per device")
+    readiness = _require_exact_keys(
+        task8b["readiness"],
+        TASK8B_READINESS_KEYS,
+        section="task8b.readiness",
+    )
+    for name in (
+        "minimum_rows_per_label",
+        "minimum_authentic_devices",
+        "minimum_generator_families",
+        "minimum_prnu_training_devices",
+    ):
+        value = readiness[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ConfigError(f"task8b.readiness.{name} must be a positive integer")
+    ratio = readiness["max_label_count_ratio"]
+    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or ratio < 1.0:
+        raise ConfigError("Task 8B max label-count ratio must be at least 1.0")
+    for name in (
+        "max_nuisance_balanced_accuracy",
+        "minimum_ca_metadata_fraction",
+        "minimum_ca_edge_rich_fraction",
+    ):
+        _require_probability(readiness[name], name=f"task8b.readiness.{name}")
+    task8b_fractions = task8b["split_fractions"]
+    if set(task8b_fractions) != {"seed_train", "selection_val", "heldout_test"}:
+        raise ConfigError("Task 8B splits must be seed_train, selection_val, and heldout_test")
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0
+        for value in task8b_fractions.values()
+    ) or abs(sum(task8b_fractions.values()) - 1.0) > 1e-9:
+        raise ConfigError("Task 8B split fractions must be positive and sum to 1.0")
 
     transforms = _require_exact_keys(
         config["benchmark_transforms"],

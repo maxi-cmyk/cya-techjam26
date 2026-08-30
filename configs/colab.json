@@ -38,6 +38,33 @@
       "final_test": 0.075
     }
   },
+  "task8b": {
+    "enabled": false,
+    "assumed_use": "noncommercial_research_hackathon",
+    "allow_noncommercial_genimage": true,
+    "source_relative_path": "raw/task8b",
+    "inventory_filename": "sources.csv",
+    "premier_relative_path": "raw/task8b/premier",
+    "genimage_ai_relative_path": "raw/task8b/genimage_ai",
+    "artifact_relative_path": "task8b",
+    "supported_source_extensions": [".jpg", ".jpeg", ".png", ".tif", ".tiff"],
+    "minimum_images_per_device": 10,
+    "readiness": {
+      "minimum_rows_per_label": 500,
+      "minimum_authentic_devices": 10,
+      "minimum_generator_families": 4,
+      "minimum_prnu_training_devices": 5,
+      "max_label_count_ratio": 1.25,
+      "max_nuisance_balanced_accuracy": 0.65,
+      "minimum_ca_metadata_fraction": 0.5,
+      "minimum_ca_edge_rich_fraction": 0.25
+    },
+    "split_fractions": {
+      "seed_train": 0.75,
+      "selection_val": 0.125,
+      "heldout_test": 0.125
+    }
+  },
   "model": {
     "identifier": "openai/clip-vit-large-patch14-336",
     "revision": "main",

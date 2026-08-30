@@ -96,9 +96,39 @@ Run these only after Task 3 is merged:
 
 Do not spend another training run on phase, the current RGB-only vector, RGB+Lab fixed concatenation, PRNU, chromatic aberration, radial distortion, or full-backbone CLIP fine-tuning **on the current matched-Q96 handoff**. PRNU and optics remain planned experiments, but their next step is better data rather than more fitting. Full CLIP fine-tuning remains optional until the frozen pipeline is complete.
 
-### Planned native physical-signal track
+### Completed native physical-signal pilot
 
 Task 8B is a separate evidence track, not a reason to block Task 3 or the viable RINE package. Prioritize PRNU first and chromatic aberration second.
+
+The repository contract now selects the accessible PREMIER v3 N1/N2 subsets for
+the authentic side; N3 remains optional because it is described on the project
+page but absent from the currently accessible public folder. GenImage `ai`
+branches provide the synthetic side. Both live below the existing
+`hackathon_data/raw/task8b` root, and outputs live below the existing
+`artifacts/task8b` root. GenImage is accepted only under the explicit assumption
+that this is non-commercial hackathon/research use; commercial reuse requires a
+replacement dataset or separate permission. The supported handoff is local-first: extract into
+`/content/hackathon_data/raw/task8b`, run `make task8b-inventory`, review the
+generated inventory, then run `make task8b-prepare`. See
+[the Task 8B dataset contract](../data/task8b_dataset.md).
+
+The attached BigGAN, ADM, Stable Diffusion V1.4, and VQDM `.zip` files were only
+the final volumes of multi-part archives and contained no local image payload;
+they were permanently removed after explicit approval. Tiny-GenImage was then
+approved as the storage-limited repackaging. GLIDE replaced low-resolution
+BigGAN in the active pool; BigGAN remains stress-only. The prepared manifest has
+640 rows per label across 13 devices and ADM, GLIDE, Midjourney, and Wukong.
+Complete device and generator groups are frozen before derivation.
+
+The source-original nuisance audit remains perfectly separable, so it is not a
+training view. Deterministic 256 px crop-only RGB TIFF views normalize dimensions,
+codec, metadata, and file size without resizing. Their nuisance balanced accuracy
+is 0.50 and 1,164 rows remain eligible. The independently calibrated PRNU gate did
+not pass: multi-image fingerprint AUC is 0.538 and the single-image proxy AUC is
+0.543 against the predeclared 0.60 minimum. Chromatic aberration is ineligible
+because lens/focal and edge-rich calibration coverage are absent. Task 8B is
+therefore closed for this licensed pilot with no physical feature retained, no
+fusion training, and no camera-authentication claim.
 
 - Authentic data must contain native or minimally processed camera images, camera/device identifiers, multiple images per physical sensor, and enough distinct devices to hold out entire sensors during validation.
 - The synthetic side must span diverse generator families and checkpoints. Resolution, codec, quality, and other export settings must be matched independently of label so the fusion head cannot learn file-pipeline shortcuts.
@@ -255,17 +285,21 @@ The verified CPU run completed all six representation/seed combinations. Magnitu
 
 The verified CPU run extracted 67 features for 1,390 rows and completed all nine color representation/seed combinations without notebook errors. Lab reached 82.42% mean clean accuracy, RGB+Lab reached 78.79%, and RGB reached 55.15%, so Lab is the selected color representation for the later fusion ablation. RGB and Lab validity was effectively complete for both labels. PRNU and chromatic-aberration eligibility was 0% for both labels because the evaluated views are matched/recompressed rather than native originals; neither family was trained or retained, radial distortion remains deferred, and no camera or lens authenticity claim is made.
 
-[ ] **Task 8B — Revisit physical-capture features with eligible native data** *(planned; does not block the current critical path)*
+[x] **Task 8B — Revisit physical-capture features with eligible native data** *(completed pilot; no physical feature retained)*
 
-  - [ ] Acquire or assemble native/minimally processed authentic images with device IDs, multiple images per sensor, camera/lens metadata where available, and permission to use them for training/evaluation.
-  - [ ] Add diverse fully synthetic sources and match codec, quality, resolution, and export settings independently of label.
-  - [ ] Freeze grouped splits that hold out complete authentic devices/camera models and synthetic generator families/checkpoints.
-  - [ ] Run a native-data nuisance audit before fitting any physical fusion head.
-  - [ ] Prioritize PRNU: compare single-image coherence with multi-image reference-fingerprint estimates where device groups permit, while keeping runtime claims reference-free and non-authenticating.
-  - [ ] Validate the chromatic-aberration estimator on native edge-rich scenes and calibration targets across corrected/uncorrected camera-lens outputs and focal lengths.
-  - [ ] Train only PRNU/CA projection and fusion weights with RINE frozen; never train the physical estimator from binary labels alone.
-  - [ ] Report clean, independent-transform, held-out-device, held-out-camera-model, and held-out-generator results plus eligibility, validity, confidence, and authentic false-positive rates.
-  - [ ] Retain PRNU or chromatic aberration only if it improves the locked 50/50 score without breaching per-class, shortcut, coverage, or generalization gates.
+  - [x] Select and verify the public/licensed sources: accessible PREMIER v3 N1/N2 (CC BY-SA 4.0; N3 optional if later accessible) and GenImage AI-only branches (CC BY-NC-SA 4.0, non-commercial only).
+  - [x] Add a fail-closed inventory importer, license/provenance fields, Task 8B-only grouped splits, existing-root storage configuration, and training-only PRNU reference construction.
+  - [x] Add separate source, PRNU-reference, chromatic-aberration metadata, and nuisance/training readiness gates plus a thin Colab staging-and-audit launcher.
+  - [x] Add a local-first extracted-file scanner that balances classes and generator families, excludes GenImage nature rows, and creates a draft inventory without overwriting review work.
+  - [x] Acquire 644 native/minimally processed PREMIER N1/N2 images across 13 device IDs with multiple images per sensor and verified CC BY-SA 4.0 permission.
+  - [x] Add four diverse fully synthetic families and materialize label-independent 256 px crop-only, metadata-stripped, uncompressed TIFF views; keep BigGAN stress-only.
+  - [x] Freeze grouped splits that hold out complete authentic devices and synthetic generator families without overlap.
+  - [x] Run source-original and matched-view nuisance audits before fitting any physical fusion head; matched balanced accuracy is 0.50.
+  - [x] Compare single-image coherence with disjoint-reference multi-image fingerprints using device identity only; neither meets the 0.60 AUC gate.
+  - [x] Apply the chromatic-aberration readiness gate; validation is correctly skipped because calibrated lens/focal/edge-rich coverage is zero.
+  - [x] Apply the frozen-RINE fusion gate; no projection or fusion weights are trained because no physical estimator independently validated.
+  - [x] Record the fail-closed decision and hashes in `artifacts/task8b/reports/retention_decision.json`; downstream binary/robustness evaluation is not run without a candidate.
+  - [x] Retain no Task 8B physical feature and make no camera or lens authenticity claim.
 
 [ ] **Task 9 — Add the texture-aware local-detail path under a fixed budget**
 

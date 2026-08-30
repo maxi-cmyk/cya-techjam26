@@ -17,6 +17,16 @@ Start with `00_colab_setup.ipynb`, using the official Google Colab VS Code exten
 
 The Colab virtual machine is disposable. Drive holds source data and durable outputs, while `/content` holds the active repository, extracted dataset, feature cache, and other high-I/O working files.
 
+Task 8B can use source files extracted directly at
+`/content/hackathon_data/raw/task8b`, without modifying the shared Drive. An
+optional personal source copy can live at
+`My Drive/cya-techjam26-data/raw/task8b`. Results are written first to
+`/content/cya-techjam26/artifacts/task8b`. Copy completed results into the existing
+Drive artifact root at `My Drive/cya-techjam26/artifacts/task8b`. The repository
+does not download or upload the licensed datasets automatically; follow
+[`docs/data/task8b_dataset.md`](../docs/data/task8b_dataset.md) for the inventory
+and license checks.
+
 After setup passes, use `01_task2_data_contract.ipynb` to audit the immutable SID sources, freeze grouped splits, and compare the two matched-clean encoding candidates. Its real-data assertions are intentionally strict and stop before derivation when source counts, corruption, C2PA scanning, or cross-label duplicate checks fail.
 
 Then use `02_stage_a_clip.ipynb` to regenerate disposable matched-clean pilots when needed, run frozen-CLIP Stage A for both matching policies and three seeds, create locked Task 5 clean-selection reports, and sync completed artifacts to Drive.
@@ -26,3 +36,13 @@ After Stage A selects a matching policy, `03_rine_stage_b.ipynb` runs the frozen
 `04_frequency_stage1.ipynb` extracts the deterministic FFT/DCT/residual feature bank, trains magnitude-only and bounded-phase variants across three seeds, audits nuisance overlap, and leaves the Stage 1 early exit disabled.
 
 `05_auxiliary_stage_c.ipynb` extracts RGB/Lab correlation plus confidence-masked PRNU/optics diagnostics. On the matched-Q96 handoff it trains only the three color variants; physical-family training remains blocked until label-independent source-original eligibility is available.
+
+`06_task8b_native_physical.ipynb` uses manually downloaded PREMIER and GenImage
+AI-only files from Colab-local storage (or an optional personal Drive copy),
+creates a draft inventory that requires manual review, builds the
+device/generator-grouped manifest, builds the 256 px matched TIFF view, runs the
+source and matched nuisance gates, compares single-image and multi-image PRNU
+without binary labels, records the retain/reject decision, and syncs reports to
+the existing Drive artifact root. It stops before model fitting whenever source,
+nuisance, or physical-estimator validation fails. The current licensed pilot
+finishes with no physical feature retained.

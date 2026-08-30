@@ -75,6 +75,23 @@ class AuxiliaryFeatureTests(unittest.TestCase):
         authentic["image_view"] = "matched_clean"
         self.assertFalse(physical_feature_eligible(authentic, min_dimension=256))
 
+    def test_task8b_physical_eligibility_requires_verified_provenance(self) -> None:
+        row = {
+            "label": "authentic",
+            "dataset_name": "premier",
+            "image_view": "source_original",
+            "width": "512",
+            "height": "512",
+            "license_verified": "true",
+            "physical_source_status": "native_camera",
+        }
+        self.assertTrue(physical_feature_eligible(row, min_dimension=256))
+        row["license_verified"] = "false"
+        self.assertFalse(physical_feature_eligible(row, min_dimension=256))
+        row["license_verified"] = "true"
+        row["physical_source_status"] = "social_media_derivative"
+        self.assertFalse(physical_feature_eligible(row, min_dimension=256))
+
 
 if __name__ == "__main__":
     unittest.main()
