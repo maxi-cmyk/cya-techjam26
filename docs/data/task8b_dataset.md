@@ -53,10 +53,20 @@ Use the official public folders:
 - [Accessible PREMIER Google Drive folder](https://drive.google.com/drive/folders/1Fb1ayRJnHGGdUI2TGfzZGQ9MRXh8a6Rj)
 - [GenImage Google Drive folder](https://drive.google.com/drive/folders/1jGt10bwTbhEZuGXLyvrCuxOI0cBqQ1FS?usp=sharing)
 
-Because the shared hackathon Drive is read-only, download the selected archives
-through the browser and upload/extract them directly into the Colab runtime. A
-personal Drive folder is optional; the original shared Drive never needs to be
-modified. The accessible PREMIER folder was manually checked on 2026-08-30 and
+The prepared Task 8B transport lives in the writable hackathon data folder
+[`task8b`](https://drive.google.com/drive/folders/1ANvP41AjiTztc0Hhv3rT-XjKguG0YNUp).
+Its canonical payload is the ordered set
+`task8b_manifest.tar.gz.upload-aa` through
+`task8b_manifest.tar.gz.upload-aw`: 23 chunks totalling 2,135,569,689 bytes.
+Together they reconstruct a SHA-256-locked archive containing `sources.csv` and
+exactly the 1,280 licensed inventory images. The Drive `premier/N1` and
+`premier/N2` directory placeholders do not need to contain individual images;
+`06_task8b_native_physical.ipynb` downloads, verifies, combines, and safely
+extracts the chunks into `/content/hackathon_data/raw/task8b`. It then verifies
+all inventory paths and refuses to continue if either local PREMIER split is
+empty.
+
+The accessible PREMIER source folder was manually checked on 2026-08-30 and
 does not contain N3, even though the project page describes that subset. Prepare
 N1 and N2 now; N3 is not required and may be added later only if it becomes
 publicly accessible under the documented license. For GenImage, acquire each
@@ -141,9 +151,6 @@ cannot infer both a PREMIER subset and device ID. Use at least 10 authentic
 devices, at least four generator families,
 and at least 500 usable files per class. The default inventory cap is 830 images
 per generator and class counts are balanced automatically.
-
-Task 8B reuses the existing data and artifact roots from `configs/colab.json`.
-No additional shared Drive root is introduced.
 
 Task 8B reuses the existing data and artifact roots from `configs/colab.json`.
 No additional Drive root is introduced.

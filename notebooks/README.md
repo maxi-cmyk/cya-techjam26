@@ -11,7 +11,7 @@ Start with `00_colab_setup.ipynb`, using the official Google Colab VS Code exten
 5. run **Colab: Mount Google Drive to Server...** from the command palette;
 6. clone/pull this repository into `/content/cya-techjam26` on the remote runtime;
 7. run `make install-colab` from that remote checkout;
-8. copy the active dataset archive or subset from Drive into `/content/hackathon_data`;
+8. run the notebook-specific preparation cell to stage its active dataset under `/content/hackathon_data`;
 9. run `make smoke` before any extraction or training command;
 10. keep temporary caches under `/content` and sync checkpoints/metrics to `/content/drive/MyDrive/cya-techjam26/artifacts`.
 
@@ -37,9 +37,12 @@ After Stage A selects a matching policy, `03_rine_stage_b.ipynb` runs the frozen
 
 `05_auxiliary_stage_c.ipynb` extracts RGB/Lab correlation plus confidence-masked PRNU/optics diagnostics. On the matched-Q96 handoff it trains only the three color variants; physical-family training remains blocked until label-independent source-original eligibility is available.
 
-`06_task8b_native_physical.ipynb` uses manually downloaded PREMIER and GenImage
-AI-only files from Colab-local storage (or an optional personal Drive copy),
-creates a draft inventory that requires manual review, builds the
+`06_task8b_native_physical.ipynb` authenticates to the prepared Task 8B Drive
+folder, downloads the ordered `task8b_manifest.tar.gz.upload-*` chunks, verifies
+the reconstructed archive, and safely extracts the licensed PREMIER and GenImage
+AI-only files into Colab-local storage. The preparation cell validates all 1,280
+`sources.csv` paths and requires populated local PREMIER N1 and N2 trees before
+the notebook creates the reviewed inventory and builds the
 device/generator-grouped manifest, builds the 256 px matched TIFF view, runs the
 source and matched nuisance gates, compares single-image and multi-image PRNU
 without binary labels, records the retain/reject decision, and syncs reports to
