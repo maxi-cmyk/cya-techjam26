@@ -243,6 +243,46 @@ class RobustnessTrainingTests(unittest.TestCase):
         )
         self.assertEqual(bank.values_by_sample_id["a"].tolist(), [1.0, 2.0, 5.0])
 
+    def test_feature_bank_loads_only_reference_free_prnu_v2_runtime_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prnu_v2.csv"
+            with path.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(
+                    stream,
+                    fieldnames=[
+                        "sample_id",
+                        "label",
+                        "split",
+                        "feature_valid",
+                        "device_id",
+                        "prnu_v2_spectral_flatness",
+                        "prnu_v2_runtime_eligible",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "sample_id": "a",
+                        "label": "authentic",
+                        "split": "seed_train",
+                        "feature_valid": "true",
+                        "device_id": "must-not-load",
+                        "prnu_v2_spectral_flatness": 0.5,
+                        "prnu_v2_runtime_eligible": 1.0,
+                    }
+                )
+            bank = load_tabular_feature_bank(
+                variant="prnu_v2",
+                frequency_table=None,
+                auxiliary_table=None,
+                prnu_table=path,
+            )
+
+        self.assertEqual(
+            bank.names,
+            ("prnu_v2:prnu_v2_spectral_flatness", "prnu_v2:prnu_v2_runtime_eligible"),
+        )
+
     def test_controlled_rine_selects_a_real_50_50_checkpoint(self) -> None:
         import torch
 

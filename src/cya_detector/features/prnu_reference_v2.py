@@ -67,6 +67,31 @@ def _wavelet_residual(
     wavelet_levels: int,
     edge_keep_quantile: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    luminance, _, residual, mask = _wavelet_components(
+        image_path,
+        crop_size=crop_size,
+        wavelet=wavelet,
+        wavelet_levels=wavelet_levels,
+        edge_keep_quantile=edge_keep_quantile,
+    )
+    return luminance, residual, mask
+
+
+def _wavelet_components(
+    image_path: Path,
+    *,
+    crop_size: int,
+    wavelet: str,
+    wavelet_levels: int,
+    edge_keep_quantile: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return luminance, raw noise residual, cleaned residual, and validity mask.
+
+    The device-reference experiment continues to consume the cleaned residual.
+    The raw residual is exposed only so the reference-free runtime diagnostic can
+    retain energy information that the normalized reference residual omits.
+    """
+
     luminance = _native_luminance_crop(image_path, crop_size)
     denoised = denoise_wavelet(
         luminance,
@@ -77,7 +102,8 @@ def _wavelet_residual(
         rescale_sigma=True,
         channel_axis=None,
     ).astype(np.float32)
-    residual = _spectral_wiener_cleanup(_zero_mean_rows_columns(luminance - denoised))
+    raw_residual = _zero_mean_rows_columns(luminance - denoised).astype(np.float32)
+    residual = _spectral_wiener_cleanup(raw_residual)
 
     gradient = np.hypot(
         ndimage.sobel(luminance, axis=0, mode="reflect"),
@@ -89,7 +115,7 @@ def _wavelet_residual(
         mask = intensity_mask & (gradient <= edge_limit)
     else:
         mask = intensity_mask
-    return luminance, residual, mask
+    return luminance, raw_residual, residual, mask
 
 
 def _estimate_fingerprint(

@@ -12,7 +12,7 @@ The shipped detector is a frozen CLIP ViT-L/14 vision backbone with RINE-style m
 - Parameter budget: approximately 304M for the vision backbone, below the 2B limit.
 - Inference: one live backbone; no ensemble and no face- or edit-specific specialists.
 - Local input: a fixed budget of texture-rich patches selected by multi-scale edge/energy maps.
-- Auxiliary input: single-image PRNU-coherence features derived from the noise residual.
+- Candidate auxiliary input: reference-free single-image PRNU-v2 summaries derived from the wavelet/spectral noise residual.
 - Auxiliary input: RGB/Lab inter-channel correlations plus confidence-aware chromatic-aberration and optional radial-distortion estimates.
 
 Patch-level probabilities may be combined using soft averaging or attention pooling. Temperature scaling is fit on the clean validation set and then reused unchanged for every robustness set so distribution-shift effects remain measurable.
@@ -44,11 +44,11 @@ LBP and GLCM may be logged as interpretable diagnostics. OCR-derived structure i
 
 The detector never creates matched JPEG copies or extra blurred, compressed, or resized variants at inference. It scores the exact `received_view`; test-time variant generation would chain processing on an already transformed input and fall outside the agreed evaluation protocol.
 
-## PRNU-Coherence Feature Extractor
+## Reference-Free PRNU-v2 Feature Extractor
 
-PRNU is a low-amplitude, multiplicative pattern associated with a physical image sensor. The extractor denoises one input image, computes its residual, and summarizes block-wise residual statistics, irradiance coupling, spatial self-consistency, and candidate CFA periodicity. The normalized vector is fused with CLIP features before the binary head.
+PRNU is a low-amplitude, multiplicative pattern associated with a physical image sensor. The candidate extractor applies the validated v2 wavelet/spectral cleanup to one input image and summarizes residual energy/distribution, spectral bands and flatness, irradiance coupling, block consistency, and candidate CFA periodicity. Eligibility, validity, and confidence accompany the normalized vector before RINE fusion.
 
-This is an experimental single-image proxy, not classical device attribution. There is no known-camera reference fingerprint and no multi-image sensor estimate, so the feature cannot verify which camera captured an image—or prove that a camera captured it at all. PRNU is never a gate: weak PRNU cannot independently mean `ai_generated`, and strong sensor-like noise cannot independently mean `authentic`.
+This is an experimental single-image diagnostic, not classical device attribution. Runtime never reads a device ID, enrolled-camera fingerprint, or PCE score, so the feature cannot verify which camera captured an image—or prove that a camera captured it at all. PRNU is never a gate: weak PRNU cannot independently mean `ai_generated`, and strong sensor-like noise cannot independently mean `authentic`.
 
 DSNU is excluded because a reliable estimate normally needs dark-frame/reference calibration, while correction can suppress the residual before export. That evidence is unavailable from one unknown image.
 
@@ -126,7 +126,7 @@ The robustness score is the mean binary accuracy across all independent transfor
 - Expected Calibration Error (ECE)
 - PRNU-only, CLIP-only, and fused accuracy
 - texture-only, CLIP + texture, CLIP + PRNU, and full-fusion accuracy
-- distribution of `prnu_coherence` by label
+- distributions of the reference-free PRNU-v2 summaries and support masks by label
 - RGB-only, Lab-only, chromatic-aberration-only, eligible radial-distortion-only, and incremental full-fusion results
 - color/optics feature validity, coverage, and confidence by label and transform
 - frequency-only accuracy and candidate fast-track precision/coverage by decoder family, checkpoint holdout, and transform

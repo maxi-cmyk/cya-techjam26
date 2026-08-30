@@ -1,4 +1,4 @@
-"""Controlled RINE plus frequency/Lab robustness fusion training."""
+"""Controlled RINE plus one predeclared auxiliary robustness candidate."""
 
 from __future__ import annotations
 
@@ -20,11 +20,12 @@ from cya_detector.predictions import PredictionRecord, write_predictions
 from cya_detector.training.auxiliary_stage_c import BASE_FIELDS as AUXILIARY_BASE_FIELDS
 from cya_detector.training.clip_stage_a import CachedEmbedding
 from cya_detector.training.frequency_stage1 import BASE_FIELDS as FREQUENCY_BASE_FIELDS
+from cya_detector.training.prnu_runtime_v2 import PRNU_RUNTIME_BASE_FIELDS
 from cya_detector.training.robustness import controlled_epoch_rows
 from cya_detector.transforms.benchmark import TransformCell
 
 
-FUSION_VARIANTS = frozenset({"frequency", "lab", "frequency_lab"})
+FUSION_VARIANTS = frozenset({"frequency", "lab", "frequency_lab", "prnu_v2"})
 
 
 @dataclass(frozen=True)
@@ -52,8 +53,9 @@ def load_tabular_feature_bank(
     variant: str,
     frequency_table: Path | None,
     auxiliary_table: Path | None,
+    prnu_table: Path | None = None,
 ) -> TabularFeatureBank:
-    """Load only the retained magnitude/residual and/or Lab feature families."""
+    """Load only the explicitly requested, schema-bounded feature family."""
 
     if variant not in FUSION_VARIANTS:
         raise ValueError(f"Unsupported robustness fusion variant: {variant}")
@@ -105,6 +107,18 @@ def load_tabular_feature_bank(
         observed = add_table(auxiliary_table, selected_names=selected, prefix="lab")
         if before and observed != before:
             raise ValueError("Frequency and Lab feature tables have different sample sets")
+
+    if variant == "prnu_v2":
+        if prnu_table is None:
+            raise ValueError("PRNU-v2 fusion requires --prnu-table")
+        prnu_rows, prnu_fields = _read_table(prnu_table)
+        del prnu_rows
+        selected = [
+            name
+            for name in prnu_fields
+            if name not in PRNU_RUNTIME_BASE_FIELDS and name.startswith("prnu_v2_")
+        ]
+        add_table(prnu_table, selected_names=selected, prefix="prnu_v2")
 
     return TabularFeatureBank(
         names=tuple(feature_names),

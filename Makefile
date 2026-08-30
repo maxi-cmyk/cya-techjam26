@@ -1,4 +1,4 @@
-.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare task8b-extract-genimage task8b-inventory task8b-manifest task8b-readiness task8b-matched task8b-prepare task8b-prnu-references task8b-prnu-validate task8b-decision task8b-v2-prnu-validate robustness-test robustness-prepare robustness-stage-a-evaluate robustness-rine-evaluate robustness-rine-train robustness-frequency-extract robustness-lab-extract robustness-fusion-train
+.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare task8b-extract-genimage task8b-inventory task8b-manifest task8b-readiness task8b-matched task8b-prepare task8b-prnu-references task8b-prnu-validate task8b-decision task8b-v2-prnu-validate robustness-test robustness-prepare robustness-stage-a-evaluate robustness-rine-evaluate robustness-rine-train robustness-frequency-extract robustness-lab-extract robustness-fusion-train robustness-prnu-v2-extract robustness-prnu-v2-train robustness-prnu-v2-fusion robustness-prnu-v2-compare
 
 DATA_ROOT ?= /content/hackathon_data
 ARTIFACT_ROOT ?= artifacts
@@ -42,9 +42,10 @@ STAGE_A_CHECKPOINT ?=
 RINE_CHECKPOINT ?=
 CONTROLLED_RINE_CHECKPOINT ?= $(ROBUSTNESS_ROOT)/train-controlled-rine/seed_$(ROBUSTNESS_SEED)/best_50_50.pt
 ROBUSTNESS_FUSION_VARIANT ?= frequency
+PRNU_V2_RUNTIME_TABLE ?= $(ROBUSTNESS_ROOT)/features/prnu_v2_runtime_features.csv
 
 robustness-test:
-	PYTHONPATH=src python -m unittest tests.test_robustness_training tests.test_evaluation tests.test_controlled_sampler -v
+	PYTHONPATH=src python -m unittest tests.test_robustness_training tests.test_prnu_runtime_v2 tests.test_evaluation tests.test_controlled_sampler -v
 
 robustness-prepare:
 	python scripts/prepare_robustness_manifest.py --input-manifest $(TASK2_SELECTED_MANIFEST) --output-manifest $(ROBUSTNESS_CLEAN_MANIFEST) --report $(ROBUSTNESS_ROOT)/manifests/clean_manifest_report.json
@@ -68,6 +69,18 @@ robustness-lab-extract:
 
 robustness-fusion-train:
 	python scripts/run_robustness_fusion.py --variant $(ROBUSTNESS_FUSION_VARIANT) --clean-manifest $(ROBUSTNESS_CLEAN_MANIFEST) --transform-manifest $(ROBUSTNESS_TRANSFORM_MANIFEST) --parent-checkpoint $(CONTROLLED_RINE_CHECKPOINT) --frequency-table $(ROBUSTNESS_ROOT)/features/frequency_features.csv --auxiliary-table $(ROBUSTNESS_ROOT)/features/auxiliary_features.csv --output-root $(ROBUSTNESS_ROOT) --seed $(ROBUSTNESS_SEED) --physical-batch-size $(ROBUSTNESS_BATCH_SIZE)
+
+robustness-prnu-v2-extract:
+	python scripts/extract_prnu_runtime_v2.py --manifest $(ROBUSTNESS_COMBINED_MANIFEST) --output $(PRNU_V2_RUNTIME_TABLE) --report $(ROBUSTNESS_ROOT)/features/prnu_v2_runtime_extraction_report.json --cache-root /content/robustness_prnu_v2_cache --matching-policy fixed_q96
+
+robustness-prnu-v2-train:
+	python scripts/train_prnu_runtime_v2.py --clean-manifest $(ROBUSTNESS_CLEAN_MANIFEST) --transform-manifest $(ROBUSTNESS_TRANSFORM_MANIFEST) --features $(PRNU_V2_RUNTIME_TABLE) --output-root $(ROBUSTNESS_ROOT) --seed $(ROBUSTNESS_SEED)
+
+robustness-prnu-v2-fusion:
+	python scripts/run_robustness_fusion.py --variant prnu_v2 --clean-manifest $(ROBUSTNESS_CLEAN_MANIFEST) --transform-manifest $(ROBUSTNESS_TRANSFORM_MANIFEST) --parent-checkpoint $(CONTROLLED_RINE_CHECKPOINT) --prnu-table $(PRNU_V2_RUNTIME_TABLE) --output-root $(ROBUSTNESS_ROOT) --seed $(ROBUSTNESS_SEED) --physical-batch-size $(ROBUSTNESS_BATCH_SIZE)
+
+robustness-prnu-v2-compare:
+	python scripts/compare_robustness_candidate.py --parent-root $(ROBUSTNESS_ROOT)/train-controlled-rine --candidate-root $(ROBUSTNESS_ROOT)/rine_prnu_v2 --candidate-name rine_prnu_v2 --output $(ROBUSTNESS_ROOT)/reports/prnu_v2
 
 task2-source-audit:
 	python scripts/build_source_manifest.py --dataset-root $(DATA_ROOT)/raw/sid_set --manifest $(ARTIFACT_ROOT)/task2/source_manifest.csv --report $(ARTIFACT_ROOT)/task2/source_audit.json --expected-csv-rows 20000

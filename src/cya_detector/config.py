@@ -26,6 +26,7 @@ REQUIRED_SECTIONS = {
     "features",
     "frequency",
     "auxiliary",
+    "prnu_v2_runtime",
     "optimization",
     "evaluation",
 }
@@ -100,6 +101,20 @@ TASK8B_READINESS_KEYS = frozenset(
         "max_nuisance_balanced_accuracy",
         "minimum_ca_metadata_fraction",
         "minimum_ca_edge_rich_fraction",
+    }
+)
+PRNU_V2_RUNTIME_KEYS = frozenset(
+    {
+        "extractor_version",
+        "crop_size",
+        "wavelet",
+        "wavelet_levels",
+        "edge_keep_quantile",
+        "block_size",
+        "minimum_eligibility_rate",
+        "maximum_label_gap",
+        "workers",
+        "sampling_epochs",
     }
 )
 
@@ -369,6 +384,30 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("Auxiliary eligibility gap must be in [0, 1]")
     if auxiliary.get("workers", 0) <= 0:
         raise ConfigError("Auxiliary workers must be positive")
+
+    prnu_runtime = _require_exact_keys(
+        config["prnu_v2_runtime"],
+        PRNU_V2_RUNTIME_KEYS,
+        section="prnu_v2_runtime",
+    )
+    if not prnu_runtime.get("extractor_version") or not prnu_runtime.get("wavelet"):
+        raise ConfigError("PRNU-v2 runtime extractor version and wavelet are required")
+    for name, minimum in (
+        ("crop_size", 128),
+        ("wavelet_levels", 1),
+        ("block_size", 16),
+        ("workers", 1),
+        ("sampling_epochs", 1),
+    ):
+        value = prnu_runtime.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ConfigError(f"prnu_v2_runtime.{name} must be an integer >= {minimum}")
+    if prnu_runtime["crop_size"] % prnu_runtime["block_size"]:
+        raise ConfigError("PRNU-v2 runtime crop_size must be divisible by block_size")
+    for name in ("edge_keep_quantile", "minimum_eligibility_rate", "maximum_label_gap"):
+        _require_probability(prnu_runtime[name], name=f"prnu_v2_runtime.{name}")
+    if prnu_runtime["edge_keep_quantile"] == 0.0:
+        raise ConfigError("PRNU-v2 runtime edge_keep_quantile must be positive")
 
     model = config["model"]
     if model.get("input_size") != 336:

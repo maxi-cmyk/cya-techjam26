@@ -133,6 +133,7 @@
     "lab_correlation": false,
     "chromatic_aberration": false,
     "radial_distortion": false,
+    "prnu_v2_runtime": false,
     "frequency_fast_track": false
   },
   "frequency": {
@@ -159,6 +160,18 @@
     "optics_max_analysis_size": 512,
     "max_eligibility_rate_gap": 0.05,
     "workers": 4
+  },
+  "prnu_v2_runtime": {
+    "extractor_version": "prnu-v2-runtime-v1",
+    "crop_size": 512,
+    "wavelet": "db2",
+    "wavelet_levels": 4,
+    "edge_keep_quantile": 0.75,
+    "block_size": 64,
+    "minimum_eligibility_rate": 0.95,
+    "maximum_label_gap": 0.05,
+    "workers": 4,
+    "sampling_epochs": 4
   },
   "optimization": {
     "loss": "bce_with_logits",

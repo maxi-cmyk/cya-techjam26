@@ -63,3 +63,11 @@ RINE across seeds 42/43/44, extracts the retained frequency magnitude/residual
 and Lab features, applies incremental fusion gates, and freezes the evidence
 needed for the Task 9 handoff. Task 10 calibration and packaging remain out of
 scope.
+
+`08_prnu_v2_binary.ipynb` consumes the durable Notebook 07 robustness bank and
+controlled-RINE checkpoints. It applies the predeclared 512px balanced-coverage
+gate, extracts only reference-free single-image PRNU-v2 summaries, trains a
+PRNU-only diagnostic and RINE+PRNU across seeds 42/43/44, compares the fusion
+candidate with controlled RINE under the same locked 50/50 and per-class gates,
+and syncs the decision to Drive. It never uses device IDs, enrolled-camera PCE,
+or `final_test`.

@@ -86,6 +86,17 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             validate_config(candidate)
 
+    def test_prnu_v2_runtime_contract_is_fail_closed(self) -> None:
+        candidate = copy.deepcopy(self.config)
+        candidate["prnu_v2_runtime"]["crop_size"] = 500
+        with self.assertRaises(ConfigError):
+            validate_config(candidate)
+
+        candidate = copy.deepcopy(self.config)
+        candidate["prnu_v2_runtime"]["minimum_eligibility_rate"] = 1.1
+        with self.assertRaises(ConfigError):
+            validate_config(candidate)
+
     def test_task8b_reuses_existing_roots_and_is_noncommercial(self) -> None:
         task8b = self.config["task8b"]
         self.assertEqual(task8b["source_relative_path"], "raw/task8b")

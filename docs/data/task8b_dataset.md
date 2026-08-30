@@ -271,6 +271,19 @@ conditions pass. No authentic/AI labels, selection/held-out rows, or binary
 fusion training were used. The next permissible step is a separately locked
 binary usefulness ablation, not automatic feature retention.
 
+That binary workflow is implemented separately in
+`notebooks/08_prnu_v2_binary.ipynb`. It does not expose enrolled-device
+fingerprints or PCE scores to the classifier. Instead, it derives a fixed
+single-image vector from the same wavelet/spectral residual pipeline: residual
+energy and distribution, spectral flatness/bands, row/column and CFA
+periodicity, luminance coupling, block energy/consistency, and support masks.
+Eligibility is based only on whether the received encoded image supports a
+native-coordinate 512 px crop; no row is resized into eligibility. Before
+training, every split/label group must reach 95% support and the label gap must
+be at most five points. The experiment then compares PRNU-only and RINE+PRNU
+across seeds 42/43/44 and every independent robustness cell. This is a forensic
+binary diagnostic, not camera identification or authentication.
+
 Run it after the original Task 8B manifest exists:
 
 ```bash

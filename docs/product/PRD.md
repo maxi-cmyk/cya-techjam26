@@ -12,7 +12,7 @@ Generative AI makes it trivial to produce highly realistic synthetic images at s
 - Image-level AIGC (AI-generated content) detection
 - Binary classification of fully AI-generated images versus authentic images
 - Robustness to common image transformations (JPEG compression, blur, resize, noise, color jitter, cropping)
-- Experimental PRNU-coherence features as physical-capture evidence and a documented robustness ablation
+- Experimental reference-free PRNU-v2 residual features as auxiliary evidence and a documented robustness ablation
 - Texture-aware local-detail features trained and evaluated under the same independent-transform protocol
 - Deterministic inter-channel color and optical-aberration features fused into Stage 2 with confidence/coverage indicators
 - Generator-family-stratified spectral analysis covering decoder/upsampling fingerprints rather than assuming one universal frequency signature
@@ -120,7 +120,7 @@ Model evaluation is weighted **50% accuracy and 50% robustness**, using the form
 ## 7. Open Product Questions
 - Whether to expose `verdict_source` (c2pa / frequency / model) as a visible Table 1 breakdown for judges, even though it's not part of the required JSON.
 - How to demonstrate the C2PA early-exit mechanism given that none of the reference training datasets are known to carry intact C2PA manifests (requires a small self-synthesized demo set).
-- Whether the single-image PRNU-coherence proxy adds measurable value after fusion, especially outside the clean and crop conditions.
+- Whether the reference-free single-image PRNU-v2 vector adds measurable value after fusion, especially outside the clean and crop conditions.
 - How much of the self-training machinery to build live versus describe as a designed-but-time-boxed mechanism, given hackathon time constraints.
 
 ## 8. Known Gaps / Risks Called Out for Follow-up

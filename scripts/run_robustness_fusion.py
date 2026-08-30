@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train retained frequency/Lab fusion candidates over controlled RINE."""
+"""Train one predeclared auxiliary fusion candidate over controlled RINE."""
 
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--parent-checkpoint", type=Path, required=True)
     parser.add_argument("--frequency-table", type=Path)
     parser.add_argument("--auxiliary-table", type=Path)
+    parser.add_argument("--prnu-table", type=Path)
     parser.add_argument("--config", type=Path, default=Path("configs/colab.json"))
     parser.add_argument("--output-root", type=Path, default=Path("artifacts/robustness"))
     parser.add_argument("--cache-root", type=Path, default=Path("/content/robustness_rine_cache"))
@@ -119,6 +120,7 @@ def main() -> int:
         variant=args.variant,
         frequency_table=args.frequency_table,
         auxiliary_table=args.auxiliary_table,
+        prnu_table=args.prnu_table,
     )
     run_directory = args.output_root / f"rine_{args.variant}" / f"seed_{args.seed}"
     run_directory.mkdir(parents=True, exist_ok=True)
@@ -161,6 +163,7 @@ def main() -> int:
         "auxiliary_table_sha256": (
             sha256_file(args.auxiliary_table) if args.auxiliary_table else None
         ),
+        "prnu_table_sha256": sha256_file(args.prnu_table) if args.prnu_table else None,
     }
     (run_directory / "complete.json").write_text(
         json.dumps(completion, indent=2, sort_keys=True) + "\n",
