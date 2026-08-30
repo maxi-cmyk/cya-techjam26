@@ -63,6 +63,21 @@ class MatchedCleanTests(unittest.TestCase):
             self.assertEqual({(row["width"], row["height"]) for row in rows}, {("72", "56")})
             self.assertTrue(all(row["chroma_subsampling"] == "4:4:4" for row in rows))
             self.assertTrue(all(Path(row["image_path"]).is_file() for row in rows))
+            for row in rows:
+                self.assertEqual(
+                    {field: row[field] for field in (
+                        "parent_width",
+                        "parent_height",
+                        "parent_mode",
+                        "parent_format",
+                    )},
+                    {
+                        "parent_width": "",
+                        "parent_height": "",
+                        "parent_mode": "",
+                        "parent_format": "",
+                    },
+                )
 
     def test_uniform_quality_is_deterministic(self) -> None:
         first = quality_for("uniform_q95_q100", source_id="sample", seed=42)

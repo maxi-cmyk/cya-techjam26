@@ -173,15 +173,17 @@ Task 2's recorded Colab run processed 20,000 rows with 10,000 images per source 
 
 [ ] **Task 3 — Implement preprocessing and the independent-transform contract**
 
-  - [ ] Separate three concepts in code: offline matched-clean construction, training augmentation policy, and deterministic evaluation transforms.
-  - [ ] Implement JPEG Q90/Q70/Q50/Q30, blur sigma 0.5/1.0/2.0, resize round trips 0.5x/0.25x, Gaussian noise sigma 0.02/0.05/0.10, color jitter within +/-20%, and center crop retaining 80%.
-  - [ ] Ensure every benchmark variant is created directly from its matched-clean parent with exactly one transform and one parameter cell.
-  - [ ] Pin resize library/version, bilinear interpolation, antialiasing, dimension rounding, RGB/dtype handling, and exact restoration dimensions; retain resize outputs losslessly.
-  - [ ] Log the parent, transform, realized parameter, seed, extractor/preprocessing version, and output hash for every materialized variant.
-  - [ ] Implement the primary controlled sampler as 50% clean and 50% transformed, with balanced labels and uniform transform-cell selection.
-  - [ ] Add SAFE as a separately named training-policy ablation: crop-based model input plus training-only flip/jitter/rotation/mask. Do not apply SAFE to validation/test or silently combine it with the controlled benchmark sampler.
-  - [ ] Prefer native-resolution parents and crop to the locked CLIP input size; specify and test deterministic handling for images smaller than the required crop.
-  - [ ] Add tests proving that evaluation variants contain one transform only, resize outputs match parent dimensions, stochastic rows reproduce from seeds, and both labels receive identical sampling distributions.
+Run focused verification with `make task3-test`; materialize the selected Task 2 fixture with `make task3-fixture ARTIFACT_ROOT=artifacts TASK2_SELECTED_MANIFEST=path/to/selected_manifest.csv`. The target's practical default remains the fixed-Q96 pilot until Task 2 records its selection.
+
+  - [x] Separate three concepts in code: offline matched-clean construction, training augmentation policy, and deterministic evaluation transforms.
+  - [x] Implement JPEG Q90/Q70/Q50/Q30, blur sigma 0.5/1.0/2.0, resize round trips 0.5x/0.25x, Gaussian noise sigma 0.02/0.05/0.10, color jitter within +/-20%, and center crop retaining 80%.
+  - [x] Ensure every benchmark variant is created directly from its matched-clean parent with exactly one transform and one parameter cell.
+  - [x] Pin resize library/version, bilinear interpolation, antialiasing, dimension rounding, RGB/dtype handling, and exact restoration dimensions; retain resize outputs losslessly.
+  - [x] Log the parent, transform, realized parameter, seed, extractor/preprocessing version, and output hash for every materialized variant.
+  - [x] Implement the primary controlled sampler as 50% clean and 50% transformed, with balanced labels and uniform transform-cell selection.
+  - [x] Add SAFE as a separately named training-policy ablation: crop-based model input plus training-only flip/jitter/rotation/mask. Do not apply SAFE to validation/test or silently combine it with the controlled benchmark sampler.
+  - [x] Prefer native-resolution parents and crop to the locked CLIP input size; specify and test deterministic handling for images smaller than the required crop.
+  - [x] Add tests proving that evaluation variants contain one transform only, resize outputs match parent dimensions, stochastic rows reproduce from seeds, and both labels receive identical sampling distributions.
   - [ ] Complete when a small fixture dataset can regenerate byte-identical deterministic variants and statistically matched stochastic policies.
 
 [ ] **Task 4 — Build the frozen-CLIP Stage A baseline** *(clean Stage A verified; robustness integration waits for Task 3)*
