@@ -269,14 +269,16 @@ device accuracy 0.8554 versus 0.10 random. Mean same-device PCE is 262.65 versus
 11.31 for different-device comparisons, so all three predeclared device-signal
 conditions pass. No authentic/AI labels, selection/held-out rows, or binary
 fusion training were used. The next permissible step is a separately locked
-binary usefulness ablation, not automatic feature retention.
+binary usefulness ablation, not automatic feature retention. That ablation is
+now complete and rejected as recorded below.
 
 The first binary handoff audit subsequently showed that none of its received
 images supported that 512 px crop. That result is retained as a protocol-mismatch
-audit, not as a PRNU rejection. Before any binary labels are used, the improved
-estimator must therefore pass a new label-free PREMIER validation at a fixed
-256 px native crop. The 512 px report and fingerprints are archived separately;
-their metrics cannot authorize the 256 px binary run.
+audit, not as a PRNU rejection. The improved estimator was therefore rerun in a
+separately versioned label-free PREMIER validation at a fixed 256 px native
+crop. It passed with AUC 0.8593, top-1 device accuracy 0.6566 versus 0.10 random,
+and mean same/different-device PCE 73.27/11.25. The 512 px report and fingerprints
+remain archived separately and were not used to authorize the 256 px result.
 
 That binary workflow is implemented separately in
 `notebooks/08_prnu_v2_binary.ipynb`. It does not expose enrolled-device
@@ -293,6 +295,15 @@ their eligibility, validity, and confidence masks state that explicitly. The
 experiment then compares PRNU-only and RINE+PRNU
 across seeds 42/43/44 and every independent robustness cell. This is a forensic
 binary diagnostic, not camera identification or authentication.
+
+The completed runtime extraction covers all 20,850 development rows with zero
+read or extraction failures; every matched-clean split/label group has 100%
+eligibility. PRNU-only reaches 85.25% mean clean accuracy, 70.92% mean
+robustness accuracy, and a 78.09% locked score. RINE+PRNU is rejected: its mean
+locked score is 33.43% versus 99.81% for controlled RINE because seeds 42 and
+43 collapse to 0.32% and 0.43%. Seed 44 reaches 99.55% but still does not improve
+its parent. No PRNU feature is retained and the competition `final_test` remains
+unread.
 
 Run it after the original Task 8B manifest exists:
 

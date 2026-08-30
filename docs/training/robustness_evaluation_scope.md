@@ -233,11 +233,11 @@ This milestone is complete when:
 - the competition `final_test` remains unopened.
 
 Task 9 compares the selected global model with global-plus-patch aggregation
-under the same robustness protocol and a fixed latency budget. In parallel,
-Notebook 08 applies the reference-free PRNU-v2 readiness and binary usefulness
-gate. If both candidates pass individually, their combined model must also pass
-the locked score, class-regression, coverage, redundancy, and latency gates.
-Task 10 begins only after both tracks record their retention decisions; it owns
+under the same robustness protocol and a fixed latency budget. Notebook 08 has
+completed the reference-free PRNU-v2 readiness and binary usefulness gate;
+fusion was rejected after two of three seeds collapsed and no combined
+texture+PRNU candidate is authorized. Task 10 begins after Task 9 records its
+retention decision; it owns
 calibration, packaging, the directory inference contract, and the one-time
 sealed final-test execution.
 

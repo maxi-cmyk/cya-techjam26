@@ -71,12 +71,12 @@ The binary head is the only classification head. Face-, edit-, and mixed-content
 ### Reference-free PRNU-v2 extractor
 
 - **Signal:** photo-response non-uniformity, modeled as a weak multiplicative sensor pattern in the denoising residual.
-- **Candidate implementation:** the validated wavelet/spectral residual cleanup, native-coordinate 512 px crop without resize, deterministic NumPy/scikit-image summaries, and normalized feature fusion in PyTorch.
+- **Evaluated implementation:** the validated wavelet/spectral residual cleanup, native-coordinate 256 px crop without resize, deterministic NumPy/scikit-image summaries, and normalized feature fusion in PyTorch.
 - **Features:** residual energy/distribution, spectral flatness and bands, local luminance coupling, block consistency, CFA/sensor periodicity, and eligibility/validity/confidence masks.
-- **Runtime boundary:** runtime is strictly single-image and reference-free. Task 8B-v2 separately validates repeatable device signal using known-device fingerprints and PCE, but those identities, fingerprints, and scores never enter the binary classifier. Its AUC 0.917 result authorizes the binary usefulness test; it does not establish usefulness by itself.
+- **Runtime boundary:** runtime is strictly single-image and reference-free. Task 8B-v2 separately validates repeatable device signal at 256 px using known-device fingerprints and PCE (AUC 0.859), but those identities, fingerprints, and scores never enter the binary classifier.
 - **Decision rule:** no direct decision rule. The feature vector is learned jointly with CLIP features, and missing/weak PRNU never independently triggers a synthetic verdict.
 - **Robustness expectation:** crop should preserve the signal best; JPEG, blur, resize, and Gaussian noise are expected to weaken it substantially. Each claim must be checked in the independent transformation table.
-- **Ablation gate:** retain PRNU fusion only if it improves the locked 50/50 score or a pre-agreed class-specific robustness measure without causing unacceptable regression.
+- **Ablation result:** reject PRNU fusion. It scores 33.43% locked versus 99.81% for controlled RINE and collapses in two of three seeds; keep the extractor diagnostic-only.
 - **DSNU:** considered but not implemented because reliable isolation normally needs dark-frame/reference calibration, while correction can suppress the residual before export. One unknown image supplies neither a reference nor a dependable estimate.
 
 ### Inter-channel color correlation

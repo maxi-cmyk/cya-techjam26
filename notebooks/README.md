@@ -82,3 +82,9 @@ masks when they cannot support a 256 px crop. If matched-clean readiness fails,
 the notebook records and syncs `blocked_data_readiness` without training. The
 earlier 512 px audit remains preserved as evidence of an incompatible protocol;
 it is not treated as evidence that the 256 px experiment failed.
+
+The completed Notebook 08 run passes the 256 px label-free device test (AUC
+0.8593; top-1 0.6566 versus 0.10 random), extracts all 20,850 development rows,
+and keeps `final_test` sealed. PRNU-only reaches a 78.09% mean locked score.
+RINE+PRNU is rejected at 33.43% mean versus 99.81% for controlled RINE after
+seeds 42 and 43 collapse; PRNU-v2 remains diagnostic-only.

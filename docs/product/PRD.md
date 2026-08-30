@@ -120,8 +120,11 @@ Model evaluation is weighted **50% accuracy and 50% robustness**, using the form
 ## 7. Open Product Questions
 - Whether to expose `verdict_source` (c2pa / frequency / model) as a visible Table 1 breakdown for judges, even though it's not part of the required JSON.
 - How to demonstrate the C2PA early-exit mechanism given that none of the reference training datasets are known to carry intact C2PA manifests (requires a small self-synthesized demo set).
-- Whether the reference-free single-image PRNU-v2 vector adds measurable value after fusion, especially outside the clean and crop conditions.
 - How much of the self-training machinery to build live versus describe as a designed-but-time-boxed mechanism, given hackathon time constraints.
+
+Resolved: PRNU-v2 validates a device-specific signal independently, but its
+binary fusion is rejected for the current handoff after severe cross-seed
+instability.
 
 ## 8. Known Gaps / Risks Called Out for Follow-up
 - **Error analysis mechanics**: need a concrete script to pull top-10 false positives/negatives; decide whether this is reflected in the UI/demo and how human verification confirms "true" detection rate.

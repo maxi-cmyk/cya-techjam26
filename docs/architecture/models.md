@@ -4,7 +4,7 @@ This project detects only two source classes: **fully authentic images** and **f
 
 ## Primary Model
 
-The shipped detector is a frozen CLIP ViT-L/14 vision backbone with RINE-style multi-layer feature extraction, a texture-aware local-detail head, deterministic PRNU/color/optics feature vectors, and a lightweight binary classification head.
+The selected pre-Task-9 detector is a frozen CLIP ViT-L/14 vision backbone with RINE-style multi-layer feature extraction and a lightweight binary classification head. Texture remains under evaluation; rejected PRNU/color/frequency and unsupported optical branches remain disabled diagnostics.
 
 - Input: one image.
 - Output: calibrated `P(ai_generated)`.
@@ -12,7 +12,7 @@ The shipped detector is a frozen CLIP ViT-L/14 vision backbone with RINE-style m
 - Parameter budget: approximately 304M for the vision backbone, below the 2B limit.
 - Inference: one live backbone; no ensemble and no face- or edit-specific specialists.
 - Local input: a fixed budget of texture-rich patches selected by multi-scale edge/energy maps.
-- Candidate auxiliary input: reference-free single-image PRNU-v2 summaries derived from the wavelet/spectral noise residual.
+- Rejected diagnostic input: reference-free single-image PRNU-v2 summaries derived from the wavelet/spectral noise residual.
 - Auxiliary input: RGB/Lab inter-channel correlations plus confidence-aware chromatic-aberration and optional radial-distortion estimates.
 
 Patch-level probabilities may be combined using soft averaging or attention pooling. Temperature scaling is fit on the clean validation set and then reused unchanged for every robustness set so distribution-shift effects remain measurable.
@@ -46,9 +46,9 @@ The detector never creates matched JPEG copies or extra blurred, compressed, or 
 
 ## Reference-Free PRNU-v2 Feature Extractor
 
-PRNU is a low-amplitude, multiplicative pattern associated with a physical image sensor. The candidate extractor applies the validated v2 wavelet/spectral cleanup to one input image and summarizes residual energy/distribution, spectral bands and flatness, irradiance coupling, block consistency, and candidate CFA periodicity. Eligibility, validity, and confidence accompany the normalized vector before RINE fusion.
+PRNU is a low-amplitude, multiplicative pattern associated with a physical image sensor. The evaluated extractor applies the validated v2 wavelet/spectral cleanup to one input image and summarizes residual energy/distribution, spectral bands and flatness, irradiance coupling, block consistency, and candidate CFA periodicity. Eligibility, validity, and confidence accompanied the normalized vector during the rejected RINE-fusion ablation.
 
-This is an experimental single-image diagnostic, not classical device attribution. Runtime never reads a device ID, enrolled-camera fingerprint, or PCE score, so the feature cannot verify which camera captured an image—or prove that a camera captured it at all. PRNU is never a gate: weak PRNU cannot independently mean `ai_generated`, and strong sensor-like noise cannot independently mean `authentic`.
+This remains an offline single-image diagnostic, not classical device attribution. It is disabled in the selected runtime after the fusion ablation collapsed in two seeds. The experiment never reads a device ID, enrolled-camera fingerprint, or PCE score, so it cannot verify which camera captured an image—or prove that a camera captured it at all.
 
 DSNU is excluded because a reliable estimate normally needs dark-frame/reference calibration, while correction can suppress the residual before export. That evidence is unavailable from one unknown image.
 
