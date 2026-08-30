@@ -64,6 +64,43 @@ class TextureModelTests(unittest.TestCase):
                 )
             )
 
+    def test_masked_nonfinite_patch_values_do_not_change_local_logits(self) -> None:
+        import torch
+        from cya_detector.models.texture import build_texture_head
+
+        torch.manual_seed(7)
+        global_features, patch_features, patch_mask = self.inputs()
+        changed_features = patch_features.clone()
+        changed_features[1, 1] = torch.nan
+        changed_features[1, 2] = torch.inf
+        changed_features[1, 3] = -torch.inf
+        for variant in ("local_only", "global_local"):
+            model = build_texture_head(
+                variant=variant,
+                layer_count=4,
+                global_dimension=8,
+                patch_dimension=6,
+                fusion_dimension=5,
+            )
+            self.assertTrue(
+                torch.allclose(
+                    model(global_features, patch_features, patch_mask),
+                    model(global_features, changed_features, patch_mask),
+                )
+            )
+
+    def test_masked_patch_weights_reject_nonfinite_available_scores(self) -> None:
+        import torch
+        from cya_detector.models.texture import masked_patch_weights
+
+        mask = torch.tensor([[True, True]])
+        for score in (torch.nan, torch.inf):
+            with self.subTest(score=score):
+                with self.assertRaisesRegex(
+                    ValueError, "^Patch scores must be finite at available positions$"
+                ):
+                    masked_patch_weights(torch.tensor([[0.0, score]]), mask)
+
     def test_all_false_patch_mask_is_rejected(self) -> None:
         import torch
         from cya_detector.models.texture import build_texture_head

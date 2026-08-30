@@ -20,6 +20,8 @@ def masked_patch_weights(scores: Any, mask: Any) -> Any:
         raise ValueError("Patch mask must have bool dtype")
     if not mask.any(dim=1).all():
         raise ValueError("Every sample requires at least one patch")
+    if not torch.isfinite(scores[mask]).all():
+        raise ValueError("Patch scores must be finite at available positions")
 
     masked_scores = scores.masked_fill(~mask, torch.finfo(scores.dtype).min)
     weights = torch.softmax(masked_scores, dim=1) * mask.to(dtype=scores.dtype)
@@ -87,17 +89,23 @@ def build_texture_head(
                 raise ValueError("Patch features must have shape [batch, patch_count, patch_dimension]")
             if patch_mask.ndim != 2 or patch_mask.dtype != torch.bool or patch_mask.shape != patch_features.shape[:2]:
                 raise ValueError("Patch mask must have shape [batch, patch_count] and bool dtype")
+            available_features = torch.where(
+                patch_mask.unsqueeze(-1), patch_features, torch.zeros_like(patch_features)
+            )
             if variant == "global_only":
                 scores = torch.zeros(patch_mask.shape, device=patch_features.device, dtype=patch_features.dtype)
             else:
                 scores = self.patch_score_classifier(
-                    torch.tanh(self.patch_score_projection(patch_features))
+                    torch.tanh(self.patch_score_projection(available_features))
                 ).squeeze(-1)
             return masked_patch_weights(scores, patch_mask)
 
         def _local_features(self, patch_features: Any, patch_mask: Any) -> Any:
-            weights = self.attention_weights(patch_features, patch_mask)
-            return (patch_features * weights.unsqueeze(-1)).sum(dim=1)
+            available_features = torch.where(
+                patch_mask.unsqueeze(-1), patch_features, torch.zeros_like(patch_features)
+            )
+            weights = self.attention_weights(available_features, patch_mask)
+            return (available_features * weights.unsqueeze(-1)).sum(dim=1)
 
         def forward(self, global_features: Any, patch_features: Any, patch_mask: Any) -> Any:
             self._validate_inputs(global_features, patch_features, patch_mask)
