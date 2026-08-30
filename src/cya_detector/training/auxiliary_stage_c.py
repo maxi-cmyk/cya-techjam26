@@ -27,17 +27,53 @@ from cya_detector.predictions import PredictionRecord, write_predictions
 
 
 BASE_FIELDS = [
-    "sample_id", "source_id", "parent_id", "image_path", "sha256", "label", "split",
-    "matching_policy", "transform", "transform_parameter", "dataset_name",
-    "generator_name", "generator_checkpoint", "capture_source", "image_view",
-    "license_status", "license_verified", "source_subset", "processing_state",
-    "physical_source_status", "device_id", "camera_make", "camera_model",
-    "lens_model", "focal_length", "split_group_id",
-    "width", "height", "file_size", "normalization_quality", "cache_key",
-    "feature_valid", "feature_error", "rgb_valid", "rgb_confidence", "lab_valid",
-    "lab_confidence", "prnu_valid", "prnu_confidence", "prnu_eligible",
-    "ca_valid", "ca_confidence", "ca_eligible", "radial_distortion_valid",
-    "radial_distortion_eligible", "analysis_width", "analysis_height",
+    "sample_id",
+    "source_id",
+    "parent_id",
+    "image_path",
+    "sha256",
+    "label",
+    "split",
+    "matching_policy",
+    "transform",
+    "transform_parameter",
+    "dataset_name",
+    "generator_name",
+    "generator_checkpoint",
+    "capture_source",
+    "image_view",
+    "license_status",
+    "license_verified",
+    "source_subset",
+    "processing_state",
+    "physical_source_status",
+    "device_id",
+    "camera_make",
+    "camera_model",
+    "lens_model",
+    "focal_length",
+    "split_group_id",
+    "width",
+    "height",
+    "file_size",
+    "normalization_quality",
+    "cache_key",
+    "feature_valid",
+    "feature_error",
+    "rgb_valid",
+    "rgb_confidence",
+    "lab_valid",
+    "lab_confidence",
+    "prnu_valid",
+    "prnu_confidence",
+    "prnu_eligible",
+    "ca_valid",
+    "ca_confidence",
+    "ca_eligible",
+    "radial_distortion_valid",
+    "radial_distortion_eligible",
+    "analysis_width",
+    "analysis_height",
 ]
 
 VARIANT_FAMILIES = {
@@ -81,9 +117,7 @@ def _merge_results(results: list[AuxiliaryFeatureResult]) -> AuxiliaryFeatureRes
     values = np.concatenate([result.values for result in results])
     families = tuple(family for result in results for family in result.families)
     valid = {key: value for result in results for key, value in result.valid.items()}
-    confidence = {
-        key: value for result in results for key, value in result.confidence.items()
-    }
+    confidence = {key: value for result in results for key, value in result.confidence.items()}
     metadata = {key: value for result in results for key, value in result.metadata.items()}
     return AuxiliaryFeatureResult(names, values, families, valid, confidence, metadata)
 
@@ -111,26 +145,45 @@ def _write_cache(path: Path, result: AuxiliaryFeatureResult) -> None:
 def _read_cache(path: Path) -> AuxiliaryFeatureResult:
     value = json.loads(path.read_text(encoding="utf-8"))
     return AuxiliaryFeatureResult(
-        names=tuple(value["names"]), values=np.asarray(value["values"], dtype=np.float64),
-        families=tuple(value["families"]), valid=value["valid"],
-        confidence=value["confidence"], metadata=value["metadata"],
+        names=tuple(value["names"]),
+        values=np.asarray(value["values"], dtype=np.float64),
+        families=tuple(value["families"]),
+        valid=value["valid"],
+        confidence=value["confidence"],
+        metadata=value["metadata"],
     )
 
 
 def extract_auxiliary_manifest(
-    *, manifest_path: Path, output_path: Path, report_path: Path, cache_root: Path,
-    matching_policy: str, configuration: dict[str, Any], workers: int,
+    *,
+    manifest_path: Path,
+    output_path: Path,
+    report_path: Path,
+    cache_root: Path,
+    matching_policy: str,
+    configuration: dict[str, Any],
+    workers: int,
+    families: tuple[str, ...] = ("color", "prnu", "optics"),
 ) -> dict[str, Any]:
+    allowed_families = {"color", "prnu", "optics"}
+    if not families or len(set(families)) != len(families):
+        raise ValueError("Auxiliary extraction families must be nonempty and unique")
+    unknown_families = sorted(set(families) - allowed_families)
+    if unknown_families:
+        raise ValueError(f"Unknown auxiliary extraction families: {unknown_families}")
     rows = [
-        row for row in read_manifest(manifest_path)
+        row
+        for row in read_manifest(manifest_path)
         if row.get("split") in {"seed_train", "selection_val"}
     ]
     if not rows or workers <= 0:
         raise ValueError("Auxiliary extraction requires rows and positive workers")
+    cache_configuration = {**configuration, "selected_families": list(families)}
     keys = {
         row["sample_id"]: auxiliary_cache_key(
-            image_sha256=row["sha256"], extractor_version=configuration["extractor_version"],
-            configuration=configuration,
+            image_sha256=row["sha256"],
+            extractor_version=configuration["extractor_version"],
+            configuration=cache_configuration,
         )
         for row in rows
     }
@@ -145,28 +198,38 @@ def extract_auxiliary_manifest(
                     result = _read_cache(path)
                 else:
                     image_path = Path(row["image_path"])
-                    result = _merge_results(
-                        [
+                    results: list[AuxiliaryFeatureResult] = []
+                    if "color" in families:
+                        results.append(
                             extract_color_features(
-                                image_path, window_size=configuration["color_window_size"],
+                                image_path,
+                                window_size=configuration["color_window_size"],
                                 low_variance_epsilon=configuration["low_variance_epsilon"],
                                 max_analysis_size=configuration["max_analysis_size"],
-                            ),
+                            )
+                        )
+                    if "prnu" in families:
+                        results.append(
                             extract_prnu_features(
-                                image_path, block_size=configuration["prnu_block_size"],
+                                image_path,
+                                block_size=configuration["prnu_block_size"],
                                 denoise_sigma=configuration["prnu_denoise_sigma"],
                                 min_dimension=configuration["prnu_min_dimension"],
                                 max_analysis_size=configuration["max_analysis_size"],
-                            ),
+                            )
+                        )
+                    if "optics" in families:
+                        results.append(
                             extract_optics_features(
-                                image_path, scale_limit=configuration["ca_scale_limit"],
+                                image_path,
+                                scale_limit=configuration["ca_scale_limit"],
                                 scale_steps=configuration["ca_scale_steps"],
                                 min_dimension=configuration["optics_min_dimension"],
                                 min_edge_fraction=configuration["ca_min_edge_fraction"],
                                 max_analysis_size=configuration["optics_max_analysis_size"],
-                            ),
-                        ]
-                    )
+                            )
+                        )
+                    result = _merge_results(results)
                     _write_cache(path, result)
             return row, result, key
         except Exception as exc:
@@ -175,7 +238,9 @@ def extract_auxiliary_manifest(
     processed: list[tuple[dict[str, str], AuxiliaryFeatureResult | None, str]] = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(process, row) for row in rows]
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Auxiliary", unit="image"):
+        for future in tqdm(
+            as_completed(futures), total=len(futures), desc="Auxiliary", unit="image"
+        ):
             processed.append(future.result())
     processed.sort(key=lambda item: item[0]["sample_id"])
     reference = next((result for _, result, _ in processed if result is not None), None)
@@ -200,8 +265,10 @@ def extract_auxiliary_manifest(
             )
             record.update(
                 {
-                    "matching_policy": matching_policy, "cache_key": key,
-                    "feature_valid": str(result is not None).lower(), "feature_error": error,
+                    "matching_policy": matching_policy,
+                    "cache_key": key,
+                    "feature_valid": str(result is not None).lower(),
+                    "feature_error": error,
                     "prnu_eligible": str(prnu_eligible).lower(),
                     "ca_eligible": str(ca_eligible).lower(),
                     "radial_distortion_eligible": "false",
@@ -209,14 +276,28 @@ def extract_auxiliary_manifest(
             )
             if result is not None:
                 record.update(result.as_dict())
-                for family in ("rgb", "lab", "prnu", "ca", "radial_distortion"):
+                extracted_result_families = (
+                    {
+                        "rgb",
+                        "lab",
+                    }
+                    if "color" in families
+                    else set()
+                )
+                if "prnu" in families:
+                    extracted_result_families.add("prnu")
+                if "optics" in families:
+                    extracted_result_families.update({"ca", "radial_distortion"})
+                for family in sorted(extracted_result_families):
                     valid = bool(result.valid.get(family, False))
                     confidence = float(result.confidence.get(family, 0.0))
                     record[f"{family}_valid"] = str(valid).lower()
                     if f"{family}_confidence" in BASE_FIELDS:
                         record[f"{family}_confidence"] = confidence
                     counters[f"{source['split']}:{source['label']}:{family}:valid"] += int(valid)
-                    counters[f"{source['split']}:{source['label']}:{family}:confidence_sum"] += confidence
+                    counters[f"{source['split']}:{source['label']}:{family}:confidence_sum"] += (
+                        confidence
+                    )
                 record["analysis_width"] = result.metadata.get("analysis_width", "")
                 record["analysis_height"] = result.metadata.get("analysis_height", "")
             counters[f"{source['split']}:{source['label']}:rows"] += 1
@@ -228,7 +309,14 @@ def extract_auxiliary_manifest(
     for split in ("seed_train", "selection_val"):
         for label in ("authentic", "ai_generated"):
             row_count = counters[f"{split}:{label}:rows"]
-            for family in ("rgb", "lab", "prnu", "ca"):
+            audit_families: list[str] = []
+            if "color" in families:
+                audit_families.extend(("rgb", "lab"))
+            if "prnu" in families:
+                audit_families.append("prnu")
+            if "optics" in families:
+                audit_families.append("ca")
+            for family in audit_families:
                 valid_count = counters[f"{split}:{label}:{family}:valid"]
                 eligible_count = (
                     counters[f"{split}:{label}:{family}:eligible"]
@@ -237,27 +325,43 @@ def extract_auxiliary_manifest(
                 )
                 family_audit.append(
                     {
-                        "split": split, "label": label, "family": family,
-                        "row_count": row_count, "eligible_count": eligible_count,
+                        "split": split,
+                        "label": label,
+                        "family": family,
+                        "row_count": row_count,
+                        "eligible_count": eligible_count,
                         "eligibility_rate": eligible_count / max(row_count, 1),
                         "valid_count": valid_count,
                         "validity_rate": valid_count / max(row_count, 1),
-                        "confidence_mean": counters[
-                            f"{split}:{label}:{family}:confidence_sum"
-                        ] / max(row_count, 1),
+                        "confidence_mean": counters[f"{split}:{label}:{family}:confidence_sum"]
+                        / max(row_count, 1),
                     }
                 )
     report = {
-        "manifest": str(manifest_path.resolve()), "output": str(output_path.resolve()),
-        "matching_policy": matching_policy, "extractor_version": configuration["extractor_version"],
-        "configuration": configuration, "row_count": len(processed),
+        "manifest": str(manifest_path.resolve()),
+        "output": str(output_path.resolve()),
+        "matching_policy": matching_policy,
+        "extractor_version": configuration["extractor_version"],
+        "configuration": configuration,
+        "selected_families": list(families),
+        "row_count": len(processed),
         "valid_count": sum(result is not None for _, result, _ in processed),
         "invalid_count": sum(result is None for _, result, _ in processed),
-        "coverage_counts": dict(sorted(counters.items())), "feature_count": len(feature_names),
+        "coverage_counts": dict(sorted(counters.items())),
+        "feature_count": len(feature_names),
         "family_audit": family_audit,
-        "feature_names": feature_names, "feature_families": feature_families,
-        "radial_distortion_status": "deferred_until_eligible_line_support_is_available",
-        "physical_claim_warning": "PRNU is a single-image coherence proxy; no camera or lens authenticity claim is made.",
+        "feature_names": feature_names,
+        "feature_families": feature_families,
+        "radial_distortion_status": (
+            "deferred_until_eligible_line_support_is_available"
+            if "optics" in families
+            else "not_extracted"
+        ),
+        "physical_claim_warning": (
+            "PRNU is a single-image coherence proxy; no camera or lens authenticity claim is made."
+            if {"prnu", "optics"} & set(families)
+            else "not_applicable_color_only"
+        ),
         "final_test_read": False,
     }
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -274,13 +378,26 @@ def _load_table(path: Path) -> tuple[list[dict[str, str]], list[str], dict[str, 
         raise ValueError("Auxiliary feature table is empty or contains invalid rows")
     families: dict[str, str] = {}
     for name in names:
-        families[name] = "rgb" if name.startswith("rgb_") else "lab" if name.startswith("lab_") else "prnu" if name.startswith("prnu_") else "ca"
+        families[name] = (
+            "rgb"
+            if name.startswith("rgb_")
+            else "lab"
+            if name.startswith("lab_")
+            else "prnu"
+            if name.startswith("prnu_")
+            else "ca"
+        )
     return rows, names, families
 
 
 def train_auxiliary_baseline(
-    *, feature_table: Path, output_directory: Path, variant: str, seed: int,
-    threshold: float, max_eligibility_gap: float,
+    *,
+    feature_table: Path,
+    output_directory: Path,
+    variant: str,
+    seed: int,
+    threshold: float,
+    max_eligibility_gap: float,
 ) -> dict[str, Any]:
     if variant not in VARIANT_FAMILIES:
         raise ValueError(f"Unsupported auxiliary variant: {variant}")
@@ -295,24 +412,30 @@ def train_auxiliary_baseline(
     if physical_family:
         for label in ("authentic", "ai_generated"):
             label_rows = [row for row in train_rows if row["label"] == label]
-            eligibility_by_label[label] = float(np.mean([row[f"{physical_family}_eligible"] == "true" for row in label_rows])) if label_rows else 0.0
+            eligibility_by_label[label] = (
+                float(np.mean([row[f"{physical_family}_eligible"] == "true" for row in label_rows]))
+                if label_rows
+                else 0.0
+            )
             eligible_rows = [
                 row for row in label_rows if row[f"{physical_family}_eligible"] == "true"
             ]
             validity_by_label[label] = (
-                float(
-                    np.mean(
-                        [row[f"{physical_family}_valid"] == "true" for row in eligible_rows]
-                    )
-                )
+                float(np.mean([row[f"{physical_family}_valid"] == "true" for row in eligible_rows]))
                 if eligible_rows
                 else 0.0
             )
         if max(eligibility_by_label.values(), default=0.0) == 0.0:
             raise ValueError(f"No physically eligible seed_train rows for {physical_family}")
-        if abs(eligibility_by_label["authentic"] - eligibility_by_label["ai_generated"]) > max_eligibility_gap:
+        if (
+            abs(eligibility_by_label["authentic"] - eligibility_by_label["ai_generated"])
+            > max_eligibility_gap
+        ):
             raise ValueError(f"{physical_family} eligibility gap exceeds {max_eligibility_gap}")
-        if abs(validity_by_label["authentic"] - validity_by_label["ai_generated"]) > max_eligibility_gap:
+        if (
+            abs(validity_by_label["authentic"] - validity_by_label["ai_generated"])
+            > max_eligibility_gap
+        ):
             raise ValueError(f"{physical_family} validity gap exceeds {max_eligibility_gap}")
 
     def matrix(source_rows: list[dict[str, str]]) -> np.ndarray:
@@ -382,12 +505,22 @@ def train_auxiliary_baseline(
     logits = classifier.decision_function(transformed_selection)
     predictions = [
         PredictionRecord(
-            sample_id=row["sample_id"], source_id=row["source_id"], parent_id=row["parent_id"],
-            split=row["split"], label=row["label"], logit=float(logit), probability=float(probability),
-            checkpoint=f"auxiliary_{variant}", seed=seed, matching_policy=row["matching_policy"],
-            transform=row.get("transform") or "clean", transform_parameter=row.get("transform_parameter", ""),
-            dataset_name=row.get("dataset_name") or "unknown", generator_name=row.get("generator_name") or "unknown",
-            generator_checkpoint=row.get("generator_checkpoint") or "unknown", capture_source=row.get("capture_source") or "unknown",
+            sample_id=row["sample_id"],
+            source_id=row["source_id"],
+            parent_id=row["parent_id"],
+            split=row["split"],
+            label=row["label"],
+            logit=float(logit),
+            probability=float(probability),
+            checkpoint=f"auxiliary_{variant}",
+            seed=seed,
+            matching_policy=row["matching_policy"],
+            transform=row.get("transform") or "clean",
+            transform_parameter=row.get("transform_parameter", ""),
+            dataset_name=row.get("dataset_name") or "unknown",
+            generator_name=row.get("generator_name") or "unknown",
+            generator_checkpoint=row.get("generator_checkpoint") or "unknown",
+            capture_source=row.get("capture_source") or "unknown",
         )
         for row, logit, probability in zip(selection_rows, logits, probabilities, strict=True)
     ]
@@ -395,20 +528,28 @@ def train_auxiliary_baseline(
     write_predictions(output_directory / "selection_predictions.csv", predictions)
     joblib.dump(
         {
-            "variant": variant, "feature_names": model_feature_names,
-            "raw_feature_names": feature_names, "scaler": scaler, "classifier": classifier,
+            "variant": variant,
+            "feature_names": model_feature_names,
+            "raw_feature_names": feature_names,
+            "scaler": scaler,
+            "classifier": classifier,
         },
         output_directory / "model.joblib",
     )
     report = {
-        "variant": variant, "seed": seed, "feature_count": len(model_feature_names),
+        "variant": variant,
+        "seed": seed,
+        "feature_count": len(model_feature_names),
         "feature_table_sha256": _sha256_file(feature_table),
-        "train_count": len(train_rows), "selection_count": len(selection_rows),
+        "train_count": len(train_rows),
+        "selection_count": len(selection_rows),
         "metrics": evaluate_predictions(predictions, threshold=threshold),
         "eligibility_by_label": eligibility_by_label,
         "validity_by_label": validity_by_label,
         "final_test_read": False,
         "physical_claim": False,
     }
-    (output_directory / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (output_directory / "report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return report

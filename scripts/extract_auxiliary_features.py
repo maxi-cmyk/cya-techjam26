@@ -26,6 +26,11 @@ def main() -> int:
     parser.add_argument("--matching-policy", default="fixed_q96")
     parser.add_argument("--config", type=Path, default=Path("configs/colab.json"))
     parser.add_argument("--workers", type=int)
+    parser.add_argument(
+        "--families",
+        default="color,prnu,optics",
+        help="Comma-separated extractor groups: color,prnu,optics",
+    )
     args = parser.parse_args()
     config = load_config(args.config)
     report = extract_auxiliary_manifest(
@@ -36,6 +41,7 @@ def main() -> int:
         matching_policy=args.matching_policy,
         configuration=config["auxiliary"],
         workers=args.workers or config["auxiliary"]["workers"],
+        families=tuple(value.strip() for value in args.families.split(",") if value.strip()),
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0

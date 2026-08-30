@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
@@ -68,6 +69,14 @@ class PredictionRecord:
         if transform == "clean":
             return "clean"
         parameter = self.transform_parameter or "default"
+        try:
+            encoded = json.loads(parameter)
+        except (json.JSONDecodeError, TypeError):
+            encoded = None
+        if isinstance(encoded, dict):
+            cell_id = encoded.get("cell_id")
+            if isinstance(cell_id, str) and cell_id.strip():
+                return cell_id.strip()
         return f"{transform}:{parameter}"
 
 

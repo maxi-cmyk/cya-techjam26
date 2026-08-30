@@ -13,9 +13,9 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from cya_detector.config import load_config
-from cya_detector.transforms.benchmark import benchmark_cells
-from cya_detector.transforms.materialize import materialize_benchmarks
+from cya_detector.config import load_config  # noqa: E402
+from cya_detector.transforms.benchmark import benchmark_cells  # noqa: E402
+from cya_detector.transforms.materialize import materialize_benchmarks  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

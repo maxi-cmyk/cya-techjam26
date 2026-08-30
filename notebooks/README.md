@@ -55,3 +55,11 @@ audits, manifests, fingerprints, reports, features, and checkpoints are synced;
 the reproducible matched-view image cache remains local. It stops before model
 fitting whenever source, nuisance, or physical-estimator validation fails. The
 current licensed pilot finishes with no physical feature retained.
+
+`07_robustness_rerun.ipynb` runs the post-Task-3 robustness milestone without
+opening `final_test`. It materializes and validates all independent transform
+cells, evaluates the existing Stage A and RINE checkpoints, retrains controlled
+RINE across seeds 42/43/44, extracts the retained frequency magnitude/residual
+and Lab features, applies incremental fusion gates, and freezes the evidence
+needed for the Task 9 handoff. Task 10 calibration and packaging remain out of
+scope.

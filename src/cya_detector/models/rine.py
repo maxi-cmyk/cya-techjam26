@@ -7,7 +7,9 @@ from typing import Any
 from cya_detector.models.clip_baseline import require_ml_dependencies
 
 
-def validate_rine_layers(layers: list[int] | tuple[int, ...], *, layer_count: int) -> tuple[int, ...]:
+def validate_rine_layers(
+    layers: list[int] | tuple[int, ...], *, layer_count: int
+) -> tuple[int, ...]:
     selected = tuple(int(layer) for layer in layers)
     if not selected:
         raise ValueError("At least one RINE layer is required")
@@ -40,9 +42,7 @@ def build_rine_head(*, layer_count: int, hidden_dimension: int) -> Any:
                     f"{tuple(layer_features.shape[1:])}, expected "
                     f"{(layer_count, hidden_dimension)}"
                 )
-            normalized = torch.nn.functional.layer_norm(
-                layer_features, (hidden_dimension,)
-            )
+            normalized = torch.nn.functional.layer_norm(layer_features, (hidden_dimension,))
             weights = torch.softmax(self.layer_logits, dim=0)
             fused = (normalized * weights.view(1, layer_count, 1)).sum(dim=1)
             return self.classifier(fused)
@@ -51,3 +51,45 @@ def build_rine_head(*, layer_count: int, hidden_dimension: int) -> Any:
             return torch.softmax(self.layer_logits.detach().cpu(), dim=0).tolist()
 
     return RineLayerFusion()
+
+
+def build_rine_auxiliary_fusion(
+    *,
+    global_model: Any,
+    auxiliary_dimension: int,
+) -> Any:
+    """Fuse a frozen RINE logit with one learned auxiliary projection."""
+
+    torch, _, _ = require_ml_dependencies()
+    if auxiliary_dimension <= 0:
+        raise ValueError("auxiliary_dimension must be positive")
+    for parameter in global_model.parameters():
+        parameter.requires_grad = False
+    global_model.eval()
+
+    class RineAuxiliaryFusion(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.global_model = global_model
+            self.auxiliary_projection = torch.nn.Linear(auxiliary_dimension, 1)
+            self.fusion = torch.nn.Linear(2, 1)
+
+        def train(self, mode: bool = True) -> Any:
+            super().train(mode)
+            self.global_model.eval()
+            return self
+
+        def forward(self, layer_features: Any, auxiliary_features: Any) -> Any:
+            if auxiliary_features.ndim != 2:
+                raise ValueError("Auxiliary input must have shape [batch, features]")
+            if auxiliary_features.shape[1] != auxiliary_dimension:
+                raise ValueError(
+                    "Unexpected auxiliary feature count: "
+                    f"{auxiliary_features.shape[1]}, expected {auxiliary_dimension}"
+                )
+            with torch.no_grad():
+                global_logit = self.global_model(layer_features)
+            auxiliary_logit = self.auxiliary_projection(auxiliary_features)
+            return self.fusion(torch.cat((global_logit, auxiliary_logit), dim=1))
+
+    return RineAuxiliaryFusion()

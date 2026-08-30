@@ -1,4 +1,4 @@
-.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare task8b-extract-genimage task8b-inventory task8b-manifest task8b-readiness task8b-matched task8b-prepare task8b-prnu-references task8b-prnu-validate task8b-decision task8b-v2-prnu-validate
+.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare task8b-extract-genimage task8b-inventory task8b-manifest task8b-readiness task8b-matched task8b-prepare task8b-prnu-references task8b-prnu-validate task8b-decision task8b-v2-prnu-validate robustness-test robustness-prepare robustness-stage-a-evaluate robustness-rine-evaluate robustness-rine-train robustness-frequency-extract robustness-lab-extract robustness-fusion-train
 
 DATA_ROOT ?= /content/hackathon_data
 ARTIFACT_ROOT ?= artifacts
@@ -31,6 +31,43 @@ task3-test:
 
 task3-fixture:
 	python scripts/materialize_transforms.py --input-manifest $(TASK2_SELECTED_MANIFEST) --output-root $(ARTIFACT_ROOT)/task3/variants --output-manifest $(ARTIFACT_ROOT)/task3/transform_manifest.csv --report $(ARTIFACT_ROOT)/task3/transform_report.json --config configs/colab.json
+
+ROBUSTNESS_ROOT ?= $(ARTIFACT_ROOT)/robustness
+ROBUSTNESS_CLEAN_MANIFEST ?= $(ROBUSTNESS_ROOT)/manifests/dev_clean_manifest.csv
+ROBUSTNESS_TRANSFORM_MANIFEST ?= $(ROBUSTNESS_ROOT)/manifests/transform_manifest.csv
+ROBUSTNESS_COMBINED_MANIFEST ?= $(ROBUSTNESS_ROOT)/manifests/combined_manifest.csv
+ROBUSTNESS_SEED ?= 42
+ROBUSTNESS_BATCH_SIZE ?= 4
+STAGE_A_CHECKPOINT ?=
+RINE_CHECKPOINT ?=
+CONTROLLED_RINE_CHECKPOINT ?= $(ROBUSTNESS_ROOT)/train-controlled-rine/seed_$(ROBUSTNESS_SEED)/best_50_50.pt
+ROBUSTNESS_FUSION_VARIANT ?= frequency
+
+robustness-test:
+	PYTHONPATH=src python -m unittest tests.test_robustness_training tests.test_evaluation tests.test_controlled_sampler -v
+
+robustness-prepare:
+	python scripts/prepare_robustness_manifest.py --input-manifest $(TASK2_SELECTED_MANIFEST) --output-manifest $(ROBUSTNESS_CLEAN_MANIFEST) --report $(ROBUSTNESS_ROOT)/manifests/clean_manifest_report.json
+	python scripts/materialize_transforms.py --input-manifest $(ROBUSTNESS_CLEAN_MANIFEST) --output-root $(ROBUSTNESS_ROOT)/variants --output-manifest $(ROBUSTNESS_TRANSFORM_MANIFEST) --report $(ROBUSTNESS_ROOT)/manifests/transform_validation_report.json --config configs/colab.json
+	python scripts/combine_robustness_manifest.py --clean-manifest $(ROBUSTNESS_CLEAN_MANIFEST) --transform-manifest $(ROBUSTNESS_TRANSFORM_MANIFEST) --output-manifest $(ROBUSTNESS_COMBINED_MANIFEST) --report $(ROBUSTNESS_ROOT)/manifests/combined_manifest_report.json --config configs/colab.json
+
+robustness-stage-a-evaluate:
+	python scripts/run_robustness.py evaluate-stage-a --clean-manifest $(ROBUSTNESS_CLEAN_MANIFEST) --transform-manifest $(ROBUSTNESS_TRANSFORM_MANIFEST) --checkpoint $(STAGE_A_CHECKPOINT) --output-root $(ROBUSTNESS_ROOT) --seed $(ROBUSTNESS_SEED) --physical-batch-size $(ROBUSTNESS_BATCH_SIZE)
+
+robustness-rine-evaluate:
+	python scripts/run_robustness.py evaluate-rine --clean-manifest $(ROBUSTNESS_CLEAN_MANIFEST) --transform-manifest $(ROBUSTNESS_TRANSFORM_MANIFEST) --checkpoint $(RINE_CHECKPOINT) --output-root $(ROBUSTNESS_ROOT) --seed $(ROBUSTNESS_SEED) --physical-batch-size $(ROBUSTNESS_BATCH_SIZE)
+
+robustness-rine-train:
+	python scripts/run_robustness.py train-controlled-rine --clean-manifest $(ROBUSTNESS_CLEAN_MANIFEST) --transform-manifest $(ROBUSTNESS_TRANSFORM_MANIFEST) --output-root $(ROBUSTNESS_ROOT) --seed $(ROBUSTNESS_SEED) --physical-batch-size $(ROBUSTNESS_BATCH_SIZE)
+
+robustness-frequency-extract:
+	python scripts/extract_frequency_features.py --manifest $(ROBUSTNESS_COMBINED_MANIFEST) --output $(ROBUSTNESS_ROOT)/features/frequency_features.csv --report $(ROBUSTNESS_ROOT)/features/frequency_extraction_report.json --cache-root /content/robustness_frequency_cache --matching-policy fixed_q96 --workers 4
+
+robustness-lab-extract:
+	python scripts/extract_auxiliary_features.py --manifest $(ROBUSTNESS_COMBINED_MANIFEST) --output $(ROBUSTNESS_ROOT)/features/auxiliary_features.csv --report $(ROBUSTNESS_ROOT)/features/auxiliary_extraction_report.json --cache-root /content/robustness_auxiliary_cache --matching-policy fixed_q96 --families color
+
+robustness-fusion-train:
+	python scripts/run_robustness_fusion.py --variant $(ROBUSTNESS_FUSION_VARIANT) --clean-manifest $(ROBUSTNESS_CLEAN_MANIFEST) --transform-manifest $(ROBUSTNESS_TRANSFORM_MANIFEST) --parent-checkpoint $(CONTROLLED_RINE_CHECKPOINT) --frequency-table $(ROBUSTNESS_ROOT)/features/frequency_features.csv --auxiliary-table $(ROBUSTNESS_ROOT)/features/auxiliary_features.csv --output-root $(ROBUSTNESS_ROOT) --seed $(ROBUSTNESS_SEED) --physical-batch-size $(ROBUSTNESS_BATCH_SIZE)
 
 task2-source-audit:
 	python scripts/build_source_manifest.py --dataset-root $(DATA_ROOT)/raw/sid_set --manifest $(ARTIFACT_ROOT)/task2/source_manifest.csv --report $(ARTIFACT_ROOT)/task2/source_audit.json --expected-csv-rows 20000

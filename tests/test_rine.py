@@ -4,7 +4,11 @@ import unittest
 import tempfile
 from pathlib import Path
 
-from cya_detector.models.rine import build_rine_head, validate_rine_layers
+from cya_detector.models.rine import (
+    build_rine_auxiliary_fusion,
+    build_rine_head,
+    validate_rine_layers,
+)
 
 
 class RineTests(unittest.TestCase):
@@ -32,6 +36,26 @@ class RineTests(unittest.TestCase):
         model = build_rine_head(layer_count=4, hidden_dimension=8)
         with self.assertRaises(ValueError):
             model(torch.randn(3, 8))
+
+    def test_auxiliary_fusion_freezes_global_rine(self) -> None:
+        import torch
+
+        global_model = build_rine_head(layer_count=4, hidden_dimension=8)
+        model = build_rine_auxiliary_fusion(
+            global_model=global_model,
+            auxiliary_dimension=5,
+        )
+        model.train()
+        output = model(torch.randn(3, 4, 8), torch.randn(3, 5))
+
+        self.assertEqual(tuple(output.shape), (3, 1))
+        self.assertFalse(model.global_model.training)
+        self.assertTrue(
+            all(not parameter.requires_grad for parameter in model.global_model.parameters())
+        )
+        self.assertTrue(
+            all(parameter.requires_grad for parameter in model.auxiliary_projection.parameters())
+        )
 
     def test_tiny_clip_intermediate_extraction(self) -> None:
         import torch

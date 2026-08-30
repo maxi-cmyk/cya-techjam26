@@ -19,6 +19,8 @@ from cya_detector.models.clip_baseline import (
 from cya_detector.models.rine import build_rine_head, validate_rine_layers
 from cya_detector.predictions import PredictionRecord, write_predictions
 from cya_detector.training.clip_stage_a import CachedEmbedding, cache_location
+from cya_detector.training.robustness import controlled_epoch_rows
+from cya_detector.transforms.benchmark import TransformCell
 
 
 def _collate_images(batch: list[dict[str, Any]]) -> dict[str, Any]:
@@ -204,6 +206,237 @@ def _save_checkpoint(path: Path, *, model: Any, state: dict[str, Any]) -> None:
     temporary = path.with_suffix(".tmp.pt")
     torch.save({"model_state_dict": model.state_dict(), **state}, temporary)
     temporary.replace(path)
+
+
+def predict_rine_checkpoint(
+    *,
+    checkpoint_path: Path,
+    rows: list[CachedEmbedding],
+    seed: int,
+    matching_policy: str,
+    device: str,
+) -> tuple[list[PredictionRecord], dict[str, Any]]:
+    """Load one RINE head and score a validated clean-plus-transform feature bank."""
+
+    torch, _, _ = require_ml_dependencies()
+    if not rows:
+        raise ValueError("RINE checkpoint evaluation requires feature rows")
+    features, _ = _load_features(rows)
+    layer_count, hidden_dimension = features.shape[1:]
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    state = checkpoint.get("model_state_dict")
+    if not isinstance(state, dict):
+        raise ValueError(f"RINE checkpoint has no model_state_dict: {checkpoint_path}")
+    model = build_rine_head(
+        layer_count=layer_count,
+        hidden_dimension=hidden_dimension,
+    ).to(device)
+    model.load_state_dict(state, strict=True)
+    predictions = _predict(
+        model=model,
+        features=features,
+        rows=rows,
+        checkpoint=str(checkpoint_path.resolve()),
+        seed=seed,
+        matching_policy=matching_policy,
+        device=device,
+    )
+    metadata = {
+        key: value
+        for key, value in checkpoint.items()
+        if key != "model_state_dict"
+    }
+    return predictions, metadata
+
+
+def train_controlled_rine_head(
+    *,
+    train_parent_rows: list[CachedEmbedding],
+    train_bank_rows: list[CachedEmbedding],
+    selection_rows: list[CachedEmbedding],
+    cells: list[TransformCell] | tuple[TransformCell, ...],
+    output_directory: Path,
+    matching_policy: str,
+    layers: list[int] | tuple[int, ...],
+    resolved_revision: str,
+    manifest_sha256: str,
+    seed: int,
+    device: str,
+    learning_rate: float,
+    weight_decay: float,
+    warmup_fraction: float,
+    max_epochs: int,
+    early_stopping_patience: int,
+    physical_batch_size: int,
+    effective_batch_size: int,
+    threshold: float,
+    run_configuration: dict[str, Any],
+    epoch_size: int | None = None,
+) -> dict[str, Any]:
+    """Retrain the frozen-RINE head on balanced clean-or-one-transform views."""
+
+    torch, _, _ = require_ml_dependencies()
+    if physical_batch_size <= 0 or effective_batch_size <= 0:
+        raise ValueError("Batch sizes must be positive")
+    if max_epochs <= 0:
+        raise ValueError("max_epochs must be positive")
+    if not train_parent_rows or not train_bank_rows or not selection_rows:
+        raise ValueError("Controlled RINE requires train parents, a train bank, and selection rows")
+
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    first_features, _ = _load_features([train_bank_rows[0]])
+    layer_count, hidden_dimension = first_features.shape[1:]
+    if layer_count != len(layers):
+        raise ValueError("Cached RINE layer count does not match configuration")
+    selection_features, _ = _load_features(selection_rows)
+    model = build_rine_head(
+        layer_count=layer_count,
+        hidden_dimension=hidden_dimension,
+    ).to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=learning_rate,
+        weight_decay=weight_decay,
+    )
+    criterion = torch.nn.BCEWithLogitsLoss()
+    accumulation_steps = max(1, math.ceil(effective_batch_size / physical_batch_size))
+    resolved_epoch_size = epoch_size or len(train_parent_rows)
+    optimizer_steps_per_epoch = math.ceil(
+        math.ceil(resolved_epoch_size / physical_batch_size) / accumulation_steps
+    )
+    total_steps = max(1, optimizer_steps_per_epoch * max_epochs)
+    warmup_steps = int(total_steps * warmup_fraction)
+
+    def learning_rate_multiplier(step: int) -> float:
+        if warmup_steps and step < warmup_steps:
+            return (step + 1) / warmup_steps
+        return 1.0
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, learning_rate_multiplier)
+    output_directory.mkdir(parents=True, exist_ok=True)
+    base_state = {
+        "stage": "controlled_rine_robustness",
+        "seed": seed,
+        "matching_policy": matching_policy,
+        "layers": list(layers),
+        "resolved_model_revision": resolved_revision,
+        "manifest_sha256": manifest_sha256,
+        "threshold": threshold,
+        "epoch_size": resolved_epoch_size,
+        "transform_cells": [cell.cell_id for cell in cells],
+        "resolved_run_configuration": run_configuration,
+    }
+    best_score = -math.inf
+    best_clean = -math.inf
+    best_robustness = -math.inf
+    best_layer_importance: list[float] | None = None
+    patience = 0
+    history: list[dict[str, Any]] = []
+
+    for epoch in range(1, max_epochs + 1):
+        selected_rows = list(
+            controlled_epoch_rows(
+                train_parent_rows,
+                train_bank_rows,
+                cells,
+                epoch_size=resolved_epoch_size,
+                project_seed=seed,
+                epoch=epoch - 1,
+            )
+        )
+        train_features, train_targets = _load_features(selected_rows)
+        if set(train_targets.tolist()) != {0.0, 1.0}:
+            raise ValueError("Controlled RINE epoch must contain both binary classes")
+        loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(train_features, train_targets),
+            batch_size=physical_batch_size,
+            shuffle=False,
+        )
+
+        model.train()
+        optimizer.zero_grad(set_to_none=True)
+        total_loss = 0.0
+        for step, (features, targets) in enumerate(loader, start=1):
+            logits = model(features.to(device)).squeeze(1)
+            loss = criterion(logits, targets.to(device)) / accumulation_steps
+            loss.backward()
+            total_loss += loss.item() * accumulation_steps
+            if step % accumulation_steps == 0 or step == len(loader):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+
+        predictions = _predict(
+            model=model,
+            features=selection_features,
+            rows=selection_rows,
+            checkpoint=f"epoch_{epoch:03d}",
+            seed=seed,
+            matching_policy=matching_policy,
+            device=device,
+        )
+        report = evaluate_predictions(predictions, threshold=threshold)
+        clean_accuracy = report["clean"]["accuracy"] if report["clean"] else None
+        robustness_accuracy = report["robustness"]["mean_accuracy"]
+        selection_score = report["selection_score"]
+        if clean_accuracy is None or robustness_accuracy is None or selection_score is None:
+            raise ValueError("Controlled RINE selection requires clean and every robustness cell")
+        history.append(
+            {
+                "epoch": epoch,
+                "training_loss": total_loss / len(loader),
+                "clean_accuracy": clean_accuracy,
+                "robustness_mean_accuracy": robustness_accuracy,
+                "selection_score": selection_score,
+                "layer_importance": model.importance_weights(),
+            }
+        )
+        state = {
+            **base_state,
+            "epoch": epoch,
+            "selection_metrics": report,
+            "layer_importance": model.importance_weights(),
+        }
+        _save_checkpoint(output_directory / "latest.pt", model=model, state=state)
+        write_predictions(output_directory / "latest_predictions.csv", predictions)
+        if selection_score > best_score:
+            best_score = selection_score
+            best_clean = clean_accuracy
+            best_robustness = robustness_accuracy
+            best_layer_importance = model.importance_weights()
+            patience = 0
+            _save_checkpoint(output_directory / "best_50_50.pt", model=model, state=state)
+            write_predictions(output_directory / "best_50_50_predictions.csv", predictions)
+        else:
+            patience += 1
+        if patience >= early_stopping_patience:
+            break
+
+    summary = {
+        **base_state,
+        "epochs_completed": len(history),
+        "best_values": {
+            "clean": None if best_clean == -math.inf else best_clean,
+            "robustness": None if best_robustness == -math.inf else best_robustness,
+            "selection_score": None if best_score == -math.inf else best_score,
+        },
+        "best_layer_importance": best_layer_importance,
+        "physical_batch_size": physical_batch_size,
+        "effective_batch_size": effective_batch_size,
+        "accumulation_steps": accumulation_steps,
+        "warmup_steps": warmup_steps,
+        "history": history,
+        "robustness_pending_task3": False,
+    }
+    (output_directory / "training_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return summary
 
 
 def train_rine_head(
