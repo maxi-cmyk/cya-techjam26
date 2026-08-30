@@ -20,6 +20,8 @@ REQUIRED_SECTIONS = {
     "preprocessing",
     "benchmark_transforms",
     "features",
+    "frequency",
+    "auxiliary",
     "optimization",
     "evaluation",
 }
@@ -86,8 +88,59 @@ def validate_config(config: dict[str, Any]) -> None:
     if config["features"].get("frequency_fast_track") is not False:
         raise ConfigError("Frequency fast-track must be disabled in the base configuration")
 
+    frequency = config["frequency"]
+    if not frequency.get("extractor_version"):
+        raise ConfigError("Frequency extractor version is required")
+    for name in ("radial_bins", "angular_bins", "dct_bins", "phase_bins"):
+        if frequency.get(name, 0) <= 1:
+            raise ConfigError(f"Frequency {name} must exceed one")
+    if frequency.get("max_analysis_size", 0) < 32:
+        raise ConfigError("Frequency max_analysis_size must be at least 32")
+    if frequency.get("workers", 0) <= 0:
+        raise ConfigError("Frequency workers must be positive")
+
+    auxiliary = config["auxiliary"]
+    if not auxiliary.get("extractor_version"):
+        raise ConfigError("Auxiliary extractor version is required")
+    for name in ("color_window_size", "prnu_block_size", "prnu_min_dimension", "optics_min_dimension"):
+        if auxiliary.get(name, 0) < 16:
+            raise ConfigError(f"Auxiliary {name} must be at least 16")
+    if auxiliary.get("low_variance_epsilon", 0) <= 0:
+        raise ConfigError("Auxiliary low_variance_epsilon must be positive")
+    if auxiliary.get("prnu_denoise_sigma", 0) <= 0:
+        raise ConfigError("Auxiliary PRNU denoise sigma must be positive")
+    if auxiliary.get("ca_scale_limit", 0) <= 0 or auxiliary.get("ca_scale_steps", 0) < 3:
+        raise ConfigError("Auxiliary CA scale search is invalid")
+    if not 0.0 <= auxiliary.get("ca_min_edge_fraction", -1) <= 1.0:
+        raise ConfigError("Auxiliary CA edge fraction must be in [0, 1]")
+    if auxiliary.get("max_analysis_size", 0) < 32 or auxiliary.get("optics_max_analysis_size", 0) < 32:
+        raise ConfigError("Auxiliary analysis sizes must be at least 32")
+    if not 0.0 <= auxiliary.get("max_eligibility_rate_gap", -1) <= 1.0:
+        raise ConfigError("Auxiliary eligibility gap must be in [0, 1]")
+    if auxiliary.get("workers", 0) <= 0:
+        raise ConfigError("Auxiliary workers must be positive")
+
     model = config["model"]
     if model.get("freeze_backbone") is not True:
         raise ConfigError("The base configuration must freeze the CLIP backbone")
     if model.get("input_size") != config["preprocessing"].get("train_crop_size"):
         raise ConfigError("Training crop size must match the CLIP input size")
+    if not model.get("revision"):
+        raise ConfigError("A requested model revision is required")
+    rine_layers = model.get("rine_layers", [])
+    if not rine_layers or rine_layers != sorted(set(rine_layers)):
+        raise ConfigError("RINE layers must be non-empty, unique, and increasing")
+    if rine_layers[0] < 1:
+        raise ConfigError("RINE layer indices must be positive")
+    if not model.get("rine_representation_version"):
+        raise ConfigError("A RINE representation version is required")
+    if not config["preprocessing"].get("version"):
+        raise ConfigError("A preprocessing version is required for embedding caches")
+    if config["evaluation"].get("bootstrap_iterations", 0) < 2:
+        raise ConfigError("At least two bootstrap iterations are required")
+    regression = config["evaluation"].get("max_per_class_accuracy_regression")
+    if regression is None or not 0.0 <= regression < 1.0:
+        raise ConfigError("Per-class regression tolerance must be in [0, 1)")
+    warmup_fraction = config["optimization"].get("warmup_fraction")
+    if warmup_fraction is None or not 0.0 <= warmup_fraction < 1.0:
+        raise ConfigError("Warmup fraction must be in [0, 1)")

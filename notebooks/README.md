@@ -18,3 +18,11 @@ Start with `00_colab_setup.ipynb`, using the official Google Colab VS Code exten
 The Colab virtual machine is disposable. Drive holds source data and durable outputs, while `/content` holds the active repository, extracted dataset, feature cache, and other high-I/O working files.
 
 After setup passes, use `01_task2_data_contract.ipynb` to audit the immutable SID sources, freeze grouped splits, and compare the two matched-clean encoding candidates. Its real-data assertions are intentionally strict and stop before derivation when source counts, corruption, C2PA scanning, or cross-label duplicate checks fail.
+
+Then use `02_stage_a_clip.ipynb` to regenerate disposable matched-clean pilots when needed, run frozen-CLIP Stage A for both matching policies and three seeds, create locked Task 5 clean-selection reports, and sync completed artifacts to Drive.
+
+After Stage A selects a matching policy, `03_rine_stage_b.ipynb` runs the frozen-CLIP intermediate-layer ablation on the same splits and seeds. It records a provisional clean decision while leaving final 50/50 retention pending the Task 3 transform rows.
+
+`04_frequency_stage1.ipynb` extracts the deterministic FFT/DCT/residual feature bank, trains magnitude-only and bounded-phase variants across three seeds, audits nuisance overlap, and leaves the Stage 1 early exit disabled.
+
+`05_auxiliary_stage_c.ipynb` extracts RGB/Lab correlation plus confidence-masked PRNU/optics diagnostics. On the matched-Q96 handoff it trains only the three color variants; physical-family training remains blocked until label-independent source-original eligibility is available.
