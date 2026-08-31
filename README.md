@@ -22,8 +22,8 @@ below for why each one failed and what that implies.
 
 **Sealed `final_test` result (run exactly once, 2026-08-31, 141 held-out
 samples): 99.29% overall accuracy** — 100.00% AI-generated accuracy (69/69,
-zero false negatives), 98.61% authentic accuracy (71/72, one false
-positive). This is the project's final result; see
+0.00% false negative rate), 98.61% authentic accuracy (71/72, **1.39% false
+positive rate**). This is the project's final result; see
 [Task 10B](#task-10b--model-selection-calibration-and-resource-profiling)
 below for the full report and how it was produced.
 
@@ -37,10 +37,14 @@ python run_inference.py <image_dir> --output-dir <output_dir>
 It takes a directory of images and writes a `predictions.json` file of
 `{"image_path", "pred"}` confidence scores (0 = authentic, 1 = AI-generated),
 plus a `report.json` validation summary, using the real controlled-RINE
-seed-42 checkpoint by default (no flags needed if the checkpoint is present
-at its default path). See
+seed-42 checkpoint by default — it's committed directly in this repository
+(`artifacts/robustness/train-controlled-rine/seed_42/best_50_50.pt`, 17KB;
+the frozen CLIP backbone it runs on top of downloads automatically from
+Hugging Face on first use). **No Colab, Drive access, or manual staging is
+needed** — `git clone` + `pip install` + run is the complete judge-facing
+path. See
 [Steps to reproduce your results](#steps-to-reproduce-your-results) for full
-commands, including how to restore the checkpoint. Everything else under
+commands. Everything else under
 `scripts/` is internal pipeline tooling (dataset construction, training,
 evaluation, robustness testing across Tasks 1–10) — not something a grader
 needs to run.
@@ -385,8 +389,8 @@ Tests: `tests/test_c2pa_inference.py`, `tests/test_directory_inference.py`
   2026-08-31 (`scripts/run_final_test.py` additionally gates behind
   `--i-understand-this-is-irreversible`). **Result** on 141 held-out
   samples: 99.29% overall accuracy, 100.00% AI-generated accuracy (69/69,
-  zero false negatives), 98.61% authentic accuracy (71/72, one false
-  positive), ECE 0.0189. `checkpoint_identity` in the published report
+  0.00% false negative rate), 98.61% authentic accuracy (71/72, 1.39% false
+  positive rate), ECE 0.0189. `checkpoint_identity` in the published report
   confirms it ran against the exact pinned checkpoint (seed 42, layers
   [6, 12, 18, 24], resolved CLIP revision
   `ce19dc912ca5cd21c8a653c79e251e808ccabcd1`). This is the project's final

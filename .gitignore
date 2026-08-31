@@ -40,6 +40,16 @@ venv/
 *.safetensors
 *.onnx
 
+# Submission checkpoint: the retained controlled-RINE seed-42 head (17KB;
+# it's only the trained fusion/classifier weights, not the frozen CLIP
+# backbone, which downloads from Hugging Face on first run). Committed so a
+# bare `git clone` + `pip install` + `python run_inference.py` works with no
+# Drive access or manual staging.
+!/artifacts/robustness/
+!/artifacts/robustness/train-controlled-rine/
+!/artifacts/robustness/train-controlled-rine/seed_42/
+!/artifacts/robustness/train-controlled-rine/seed_42/best_50_50.pt
+
 # Reports generated from experiments
 *.log
 wandb/
