@@ -102,10 +102,18 @@ copied to
 `My Drive/cya-techjam26/artifacts/task9/clean_pilot_v1/robustness_stage1_v1`
 only after materialization, evaluation, and comparison each complete, so a
 fresh runtime can resume verified work without ever treating a partially
-copied Drive directory as complete. The real Colab Stage-1 run and its
-`retain_texture_for_full_robustness`/`reject_texture_robustness_stage1`
-decision remain pending; a pass authorizes only the remaining Task 3
-noise/color-jitter/crop cells, never final retention or `final_test`.
+copied Drive directory as complete. The verified Colab Stage-1 run emitted
+`reject_texture_robustness_stage1`: `global_local` tied controlled RINE on
+clean accuracy (100% each) but scored materially worse on robustness (93.13%
+mean versus 99.80% for controlled RINE, 96.66% for the internal `global_only`
+ablation), with both locked-score deltas negative and the worst-cell gate
+failing on multiple cells — most severely `resize_scale_0.25`, where
+AI-generated accuracy fell to 50.2% for `global_local` and 18.4% for
+`local_only`. The local-patch signal is fragile under aggressive
+downsampling/blur/compression and misleads the fusion head under those
+transforms. Controlled RINE remains the sole retained global representation;
+no texture feature carries into Task 10, and the remaining Task 3
+noise/color-jitter/crop cells are not authorized for evaluation.
 
 The later workflow runs the bounded
 native-coordinate PRNU v2 estimator. Original evidence is synced to
