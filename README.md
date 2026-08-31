@@ -71,17 +71,50 @@ signal is fragile under aggressive downsampling/blur/compression. **Controlled
 RINE (Task 6) is the sole retained model** going into Task 10; no texture,
 frequency, Lab, or PRNU fusion candidate is retained.
 
-## Task 10A — Inference skeleton (in progress)
+## Task 10 — Inference CLI, calibration, and packaging
 
-A model-agnostic, synchronous directory-inference CLI: given an image
-directory, discover supported images deterministically, run a Stage 0 C2PA
-verified-claim check per image, call an injected `predict_probability`
-function for everything C2PA doesn't early-exit, and publish a public
-`{"image_path", "pred"}` JSON array plus a separate validation report. No real
-model is wired in yet — that, calibration, and the sealed `final_test` run are
-Task 10B. Design lives at
-`docs/superpowers/specs/2026-08-31-task-10a-inference-skeleton-design.md` (in
-progress) on the `task10a-inference-skeleton` branch/worktree.
+Task 10 is split into two independently scoped pieces so the CLI skeleton
+does not have to wait on final model selection, and calibration/`final_test`
+does not have to wait on CLI plumbing.
+
+### Task 10A — Inference skeleton (in progress)
+
+Everything needed to run a directory of images through *some*
+`predict_probability` function and publish a spec-compliant result, with no
+opinion about which model that function calls:
+
+- Recursive, deterministic image discovery (`.jpg`/`.jpeg`/`.png`/`.webp`/
+  `.tif`/`.tiff`, case-insensitive, symlinks never followed, NFC-normalized
+  relative-path ordering, empty discovery and path collisions are fatal).
+- Decode/validate/normalize each image to RGB, with an explicit
+  decompression-bomb guard and five stable, path-sanitized error codes
+  (`file_unreadable`, `decode_failed`, `unsupported_image`,
+  `invalid_dimensions`, `decompression_bomb`) rather than leaking exception
+  text.
+- Stage 0 C2PA check (`has_verified_ai_generation_claim`): true only for a
+  verified, active `c2pa.created`/`trainedAlgorithmicMedia` claim; every other
+  outcome (missing dependency, no manifest, invalid signature, malformed
+  claim, authenticity-only claim, parser failure) returns `False` and falls
+  through to the predictor. No network access, no registry, ever.
+  This is the one place that deliberately catches everything internally —
+  everywhere else, an uncatalogued exception is a fatal run failure.
+- `predict_probability(image) -> float` is injected (dependency injection,
+  not a registry) — Task 10A ships a trivial stub (fixed constant) as the
+  default so `scripts/run_inference.py <image_dir> --output-dir <dir>` is
+  runnable end-to-end today; Task 10B swaps in the real controlled-RINE
+  adapter as one function.
+- Publishes `predictions.json` (public `{"image_path", "pred"}` contract) and
+  `report.json` (`schema_version`, `summary`, `errors[]`) to `--output-dir`
+  only on non-fatal completion — both are written to temp siblings and
+  renamed into place (`report.json` first, `predictions.json` last, so its
+  presence is the strongest "this run is real and complete" signal), and a
+  fatal run never touches a prior successful run's output. Exit codes: `0`
+  full success, `1` fatal, `2` argparse usage error, `3` partial success.
+  One stdout line per processed image plus a final summary line.
+
+Design lives at
+`docs/superpowers/specs/2026-08-31-task-10a-inference-skeleton-design.md`
+(in progress) on the `task10a-inference-skeleton` branch/worktree.
 
 Implementation is split for parallel work:
 
@@ -101,3 +134,26 @@ Implementation is split for parallel work:
 - **Integration, last:** `tests/test_directory_inference.py` exercises the
   full pipeline end-to-end; write it once both streams land, or against the
   other stream's real code once merged.
+
+### Task 10B — Model selection, calibration, and final_test (not started)
+
+Everything Task 10A deliberately defers, blocked on Task 10A's `Predictor`
+protocol landing:
+
+- Select the final retained checkpoint — controlled RINE is the only
+  surviving candidate after Task 9's rejection; no further architecture
+  search is expected.
+- Fit one temperature on clean `selection_val` logits and reuse it unchanged
+  everywhere; keep the binary threshold fixed unless the challenge specifies
+  otherwise.
+- Write the real `predict_probability` adapter around the selected,
+  calibrated checkpoint and wire it into `scripts/run_inference.py` in place
+  of Task 10A's stub.
+- Measure final model size, latency, peak memory, and disk/cache
+  requirements on the target machine.
+- Run the sealed `final_test` exactly once, after weights, calibration,
+  threshold, and feature flags are frozen; generate robustness, ablation,
+  generalization, and error-analysis artifacts.
+- Any optional post-baseline experiment (fine-tuning, self-training,
+  external data) is separately versioned and must clear the same score/
+  per-label/held-out-source/resource gates or be rolled back.
