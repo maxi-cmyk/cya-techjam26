@@ -10,13 +10,30 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-31-task-9-texture-robustness-stage1-design.md`
 
+## Verified handoff
+
+- Live `origin/main` was verified at `8a525d60f0ad115cf9df9bdda61e1fa475df95ae`; an isolated checkout of that commit passes all 214 tests.
+- Start from a new `task9-texture-robustness-stage1` branch in a sibling worktree based on current `origin/main`. Require `8a525d6` to be an ancestor if `origin/main` has advanced.
+- Do not copy or recover code from the abandoned uncommitted Task 1 robustness attempt. The only permitted local carry-forward is the deliberate, byte-identical clean-launcher rename specified in Task 5.
+- Read this plan and its specification completely before implementation. Read `.superpowers/sdd/2026-08-31-task-9-texture-robustness-stage1/progress.md` if it exists; it was absent at handoff.
+- Execute Tasks 1-5 one at a time with subagent-driven development, RED/GREEN TDD, task-level review, and a final whole-branch review. Report only pass/fail, commit hash, and a short evidence pointer in the progress ledger.
+- Do not push, merge, remove worktrees, or access `final_test` without explicit approval.
+
+Clean setup commands:
+
+```bash
+git fetch origin main
+git merge-base --is-ancestor 8a525d6 origin/main
+git worktree add -b task9-texture-robustness-stage1 ../cya-techjam26-task9-texture-robustness-stage1 origin/main
+```
+
 ## Global Constraints
 
 - Input is fixed-Q96 matched-clean `selection_val` only; reject every other split/view/policy.
 - Use exactly `jpeg_q90`, `jpeg_q70`, `jpeg_q50`, `jpeg_q30`, `blur_sigma_0.5`, `blur_sigma_1.0`, `blur_sigma_2.0`, `resize_scale_0.5`, and `resize_scale_0.25`.
 - Every transformed row derives directly from clean; transform chaining is forbidden.
 - Evaluate `global_only`, `local_only`, and `global_local` for seeds `42`, `43`, and `44`; `global_local` must pass against both `global_only` and the retained controlled-RINE parent. `local_only` is diagnostic.
-- Restore the three controlled-RINE per-seed `predictions.csv` artifacts, require all 27 seed-cell partitions for the same nine cells and seeds, verify their source manifest/checkpoint/output hashes, and recompute the nine-cell comparator score. Do not substitute the persisted 14-cell aggregate (`0.9981`).
+- Restore the three controlled-RINE per-seed `best_50_50_predictions.csv` artifacts, require all 27 seed-cell partitions for the same nine cells and seeds, verify their source manifest/checkpoint/output hashes, and recompute the nine-cell comparator score. Do not substitute the persisted 14-cell aggregate (`0.9981`).
 - Recompute patch selection from each transformed image; never reuse clean coordinates.
 - Checkpoints, threshold, and clean calibration are immutable. No training or fine-tuning is permitted.
 - Never read `seed_train`, `self_train_pool`, or sealed `final_test` in this continuation.
@@ -225,7 +242,7 @@ git commit -m "feat: evaluate frozen texture heads under transforms"
 - Modify: `tests/test_texture_robustness.py`
 
 **Interfaces:**
-- Consumes: clean comparison artifacts, 81 validated texture prediction slices, and three persisted controlled-RINE per-seed prediction files containing all 27 required seed-cell partitions from the completed Task 3 robustness run.
+- Consumes: clean comparison artifacts, 81 validated texture prediction slices, and three persisted controlled-RINE per-seed `best_50_50_predictions.csv` files containing all 27 required seed-cell partitions from the completed Task 3 robustness run.
 - Produces: `compare_texture_stage1(*, clean_experiment_root: Path, robustness_root: Path, controlled_rine_root: Path, config: dict) -> dict[str, Any]` and the complete report/manifest tree.
 
 - [ ] **Step 1: Write failing metric and gate tests**
@@ -288,10 +305,12 @@ git commit -m "feat: gate texture robustness stage 1"
 ### Task 5: Colab Launcher, Commands, Documentation, and Full Verification
 
 **Files:**
-- Create: `notebooks/08_texture_robustness_stage1.ipynb`
+- Rename: `notebooks/07_texture_stage_d.ipynb` to `notebooks/09_texture_stage_d.ipynb`
+- Create: `notebooks/10_texture_robustness_stage1.ipynb`
 - Modify: `Makefile`
 - Modify: `notebooks/README.md`
 - Modify: `docs/planning/nextSteps.md`
+- Modify: `tests/test_texture_training.py`
 - Modify: `tests/test_texture_robustness.py`
 
 **Interfaces:**
@@ -299,7 +318,7 @@ git commit -m "feat: gate texture robustness stage 1"
 
 - [ ] **Step 1: Write failing command/notebook contract tests**
 
-Assert all targets exist; the notebook contains no transform/model/metric/gate implementation; `/content` holds images/caches; Drive receives only completed durable artifacts; checkpoint restore covers all variants/seeds; and compare follows successful materialize/evaluate steps.
+Assert the clean launcher is referenced only as `09_texture_stage_d.ipynb`, all targets exist, the Stage-1 notebook is `10_texture_robustness_stage1.ipynb`, neither notebook contains transform/model/metric/gate implementation, `/content` holds images/caches, Drive receives only completed durable artifacts, checkpoint restore covers all variants/seeds, and compare follows successful materialize/evaluate steps.
 
 - [ ] **Step 2: Run tests and verify RED**
 
@@ -307,7 +326,7 @@ Run the Task 2 focused command. Expected: FAIL because launcher and targets are 
 
 - [ ] **Step 3: Add sequential Make targets and thin resumable notebook**
 
-Use overridable variables rooted at the clean Drive artifacts and `/content`. The notebook mounts Drive, checks out the exact branch/commit, restores the Task 2 bundle, nine clean runs, and the controlled-RINE manifests/checkpoints/predictions required for the exact nine-cell comparison; invokes the three CLIs; inspects an initial slice; resumes verified predictions; and copies completed report artifacts only. It must never create a completed marker before comparison succeeds.
+Rename the existing clean launcher with `git mv` and update every documentation and test reference. Use overridable variables rooted at the clean Drive artifacts and `/content`. The new Stage-1 notebook mounts Drive, checks out the exact branch/commit, restores the Task 2 bundle, nine clean runs, and the controlled-RINE manifests/checkpoints/predictions required for the exact nine-cell comparison; invokes the three CLIs; inspects an initial slice; resumes verified predictions; and copies completed report artifacts only. It must never create a completed marker before comparison succeeds.
 
 - [ ] **Step 4: Update documentation with the real clean result and pending robustness status**
 
@@ -321,7 +340,7 @@ python -m ruff check src/cya_detector/evaluation/texture_robustness.py scripts/m
 conda run -n cya-techjam26 python scripts/smoke_check.py --config configs/colab.json --allow-missing-dependencies
 ```
 
-Expected: no new failures beyond the separately ledgered pre-existing Windows Task 8B assertion; lint for new files is clean; smoke passes.
+Expected: all focused tests pass, lint for new files is clean, and smoke passes. The former Windows Task 8B path assertion was fixed on `main` before this handoff and is not an accepted baseline failure.
 
 - [ ] **Step 6: Run full suite and dependency-free end-to-end fixture**
 
@@ -335,6 +354,6 @@ The fixture must execute materialization → shared fake extraction → 81 froze
 - [ ] **Step 7: Commit**
 
 ```powershell
-git add Makefile notebooks/08_texture_robustness_stage1.ipynb notebooks/README.md docs/planning/nextSteps.md tests/test_texture_robustness.py
+git add Makefile notebooks/07_texture_stage_d.ipynb notebooks/09_texture_stage_d.ipynb notebooks/10_texture_robustness_stage1.ipynb notebooks/README.md docs/planning/nextSteps.md tests/test_texture_training.py tests/test_texture_robustness.py
 git commit -m "docs: expose texture robustness stage 1 workflow"
 ```
