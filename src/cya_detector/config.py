@@ -27,6 +27,7 @@ REQUIRED_SECTIONS = {
     "frequency",
     "auxiliary",
     "texture",
+    "texture_robustness_stage1",
     "prnu_v2_runtime",
     "optimization",
     "evaluation",
@@ -446,6 +447,14 @@ def validate_config(config: dict[str, Any]) -> None:
         isinstance(value, bool) or not isinstance(value, int) for value in texture["seeds"]
     ):
         raise ConfigError("Texture seeds must be a list of integers")
+
+    # Imported lazily to keep the evaluation contract dependent on the core
+    # configuration error type without creating an import cycle at module load.
+    from cya_detector.evaluation.texture_robustness import (
+        validate_robustness_contract,
+    )
+
+    validate_robustness_contract(config)
 
     prnu_runtime = _require_exact_keys(
         config["prnu_v2_runtime"],

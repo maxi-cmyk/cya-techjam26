@@ -56,6 +56,37 @@ class ConfigTests(unittest.TestCase):
                 with self.assertRaises(ConfigError):
                     validate_config(candidate)
 
+    def test_texture_robustness_rejects_unknown_missing_or_deferred_cells(self) -> None:
+        from cya_detector.evaluation.texture_robustness import STAGE1_CELL_IDS
+
+        for bad in (("jpeg_q90",), STAGE1_CELL_IDS + ("noise_sigma_0.02",)):
+            with self.subTest(cell_ids=bad):
+                candidate = copy.deepcopy(self.config)
+                candidate["texture_robustness_stage1"]["cell_ids"] = list(bad)
+                with self.assertRaises(ConfigError):
+                    validate_config(candidate)
+
+    def test_texture_robustness_contract_rejects_missing_or_unknown_keys(self) -> None:
+        for name, mutate in (
+            (
+                "missing",
+                lambda candidate: candidate["texture_robustness_stage1"].pop(
+                    "worst_cell_tolerance"
+                ),
+            ),
+            (
+                "unknown",
+                lambda candidate: candidate["texture_robustness_stage1"].update(
+                    unexpected=True
+                ),
+            ),
+        ):
+            with self.subTest(case=name):
+                candidate = copy.deepcopy(self.config)
+                mutate(candidate)
+                with self.assertRaises(ConfigError):
+                    validate_config(candidate)
+
     def test_transform_chaining_cannot_be_enabled(self) -> None:
         candidate = copy.deepcopy(self.config)
         candidate["benchmark_transforms"]["allow_chaining"] = True

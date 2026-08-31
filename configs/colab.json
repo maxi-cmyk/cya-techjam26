@@ -171,6 +171,12 @@
     "variants": ["global_only", "local_only", "global_local"],
     "seeds": [42, 43, 44]
   },
+  "texture_robustness_stage1": {
+    "experiment_name": "robustness_stage1_v1",
+    "cell_ids": ["jpeg_q90", "jpeg_q70", "jpeg_q50", "jpeg_q30", "blur_sigma_0.5", "blur_sigma_1.0", "blur_sigma_2.0", "resize_scale_0.5", "resize_scale_0.25"],
+    "aggregate_class_tolerance": 0.01,
+    "worst_cell_tolerance": 0.03
+  },
   "prnu_v2_runtime": {
     "extractor_version": "prnu-v2-runtime-v2-crop256",
     "crop_size": 256,
