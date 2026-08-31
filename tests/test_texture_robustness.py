@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import patch
@@ -25,6 +26,8 @@ from cya_detector.data.manifest import (
 from cya_detector.evaluation.texture_robustness import (
     STAGE1_CELL_IDS,
     TextureRobustnessError,
+    TextureRobustnessPrerequisiteError,
+    compare_texture_stage1,
     evaluate_texture_stage1,
     materialize_texture_stage1,
     validate_robustness_contract,
@@ -819,6 +822,304 @@ class TextureRobustnessEvaluationTests(unittest.TestCase):
             repaired_patch["patch_mask"].tolist(),
             repaired_patch["cache_contract"]["availability_mask"],
         )
+
+
+_PARENTS = (
+    ("authentic", "authentic__source_original"),
+    ("ai_generated", "ai_generated__source_original"),
+)
+
+
+def _probability_for(label: str, *, correct: bool) -> float:
+    wants_positive = label == "ai_generated"
+    predicted_positive = wants_positive if correct else not wants_positive
+    return 0.75 if predicted_positive else 0.25
+
+
+class TextureRobustnessComparisonTests(unittest.TestCase):
+    """The break caught here is a gate that trusts an unverified or incomplete
+    controlled-RINE comparator, or that lets the treatment tie or lose against a
+    comparator without rejecting."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.config = load_config(CONFIG_PATH)
+        self.clean_root = self.root / "clean-runs"
+        self.robustness_root = self.root / "robustness-predictions"
+        self.rine_root = self.root / "controlled-rine"
+        self.reset_comparison_fixture()
+
+    @property
+    def comparison_args(self) -> dict[str, object]:
+        return {
+            "clean_experiment_root": self.clean_root,
+            "robustness_root": self.robustness_root,
+            "controlled_rine_root": self.rine_root,
+            "config": self.config,
+        }
+
+    def reset_comparison_fixture(self) -> None:
+        import shutil
+
+        shutil.rmtree(self.clean_root, ignore_errors=True)
+        shutil.rmtree(self.robustness_root, ignore_errors=True)
+        shutil.rmtree(self.rine_root, ignore_errors=True)
+        self._write_clean_runs()
+        wrong = {("global_only", "jpeg_q90", 42, "ai_generated")}
+        for variant in ("global_only", "local_only", "global_local"):
+            self._write_variant_predictions(variant, wrong={unit[1:] for unit in wrong if unit[0] == variant})
+        self._write_rine_predictions(wrong={("jpeg_q70", 43, "ai_generated")})
+
+    def _write_clean_runs(self) -> None:
+        import torch
+
+        for variant in ("global_only", "local_only", "global_local"):
+            for seed in (42, 43, 44):
+                run = self.clean_root / variant / f"seed_{seed}"
+                checkpoint = run / "checkpoints" / "best_clean.pt"
+                checkpoint.parent.mkdir(parents=True)
+                model = build_texture_head(
+                    variant=variant, layer_count=4, global_dimension=3,
+                    patch_dimension=3, fusion_dimension=256,
+                )
+                torch.save(
+                    {
+                        "model_state_dict": model.state_dict(), "stage": "texture_stage_d",
+                        "variant": variant, "seed": seed,
+                    },
+                    checkpoint,
+                )
+                prediction = run / "predictions" / "selection_val.csv"
+                prediction.parent.mkdir(parents=True)
+                with prediction.open("w", newline="", encoding="utf-8") as stream:
+                    writer = csv.DictWriter(
+                        stream,
+                        fieldnames=(
+                            "sample_id", "source_id", "parent_id", "split", "label",
+                            "logit", "probability", "checkpoint", "seed",
+                            "matching_policy", "transform", "transform_parameter",
+                            "dataset_name", "generator_name", "generator_checkpoint",
+                            "capture_source",
+                        ),
+                    )
+                    writer.writeheader()
+                    for label, parent_id in _PARENTS:
+                        probability = _probability_for(label, correct=True)
+                        writer.writerow(
+                            {
+                                "sample_id": parent_id, "source_id": label, "parent_id": parent_id,
+                                "split": "selection_val", "label": label,
+                                "logit": "1" if probability >= 0.5 else "-1",
+                                "probability": probability, "checkpoint": "best_clean", "seed": seed,
+                                "matching_policy": "fixed_q96", "transform": "clean",
+                                "transform_parameter": "", "dataset_name": "fixture",
+                                "generator_name": "unknown", "generator_checkpoint": "unknown",
+                                "capture_source": "unknown",
+                            }
+                        )
+                metadata = run / "metadata" / "run_metadata.json"
+                metadata.parent.mkdir(parents=True)
+                metadata.write_text(
+                    json.dumps(
+                        {
+                            "status": "completed", "stage": "texture_stage_d", "variant": variant,
+                            "seed": seed, "matching_policy": "fixed_q96",
+                            "optimization": {"threshold": 0.5},
+                            "run_configuration": {
+                                "texture": {"experiment_name": "clean_pilot_v1"},
+                                "evaluation": {"threshold": 0.5},
+                            },
+                            "artifact_sha256": {
+                                "checkpoints/best_clean.pt": hashlib.sha256(
+                                    checkpoint.read_bytes()
+                                ).hexdigest(),
+                                "predictions/selection_val.csv": hashlib.sha256(
+                                    prediction.read_bytes()
+                                ).hexdigest(),
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+    def _write_variant_predictions(
+        self, variant: str, *, wrong: set[tuple[str, int, str]],
+    ) -> None:
+        for seed in (42, 43, 44):
+            for cell_id in STAGE1_CELL_IDS:
+                path = self.robustness_root / variant / f"seed_{seed}" / f"{cell_id}.csv"
+                metadata_path = path.with_suffix(".meta.json")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                rows = []
+                for label, parent_id in _PARENTS:
+                    correct = (cell_id, seed, label) not in wrong
+                    probability = _probability_for(label, correct=correct)
+                    clean_probability = _probability_for(label, correct=True)
+                    rows.append(
+                        {
+                            "sample_id": f"{parent_id}__{cell_id}", "parent_id": parent_id,
+                            "source_id": label, "split": "selection_val", "label": label,
+                            "cell_id": cell_id, "cell_parameters": json.dumps({"cell_id": cell_id}),
+                            "variant": variant, "seed": seed,
+                            "logit": "1" if probability >= 0.5 else "-1", "probability": probability,
+                            "prediction": int(probability >= 0.5),
+                            "paired_clean_probability": clean_probability,
+                            "paired_clean_prediction": int(clean_probability >= 0.5),
+                            "checkpoint_sha256": "checkpoint-hash", "input_sha256": "input-hash",
+                            "parent_sha256": "parent-hash", "global_feature_sha256": "global-hash",
+                            "patch_feature_sha256": "patch-hash", "cache_contract_sha256": "cache-hash",
+                            "patch_boxes": "[]", "available_patch_count": 1,
+                            "matching_policy": "fixed_q96", "transform": "benchmark",
+                            "transform_parameter": json.dumps({"cell_id": cell_id}),
+                        }
+                    )
+                with path.open("w", newline="", encoding="utf-8") as stream:
+                    writer = csv.DictWriter(stream, fieldnames=robustness_module._EVALUATION_FIELDS)
+                    writer.writeheader()
+                    writer.writerows(rows)
+                metadata_path.write_text(
+                    json.dumps(
+                        {
+                            "status": "completed",
+                            "contract": {"variant": variant, "seed": seed, "cell_id": cell_id},
+                            "row_count": len(rows),
+                            "csv_sha256": sha256_file(path),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+    def _write_rine_predictions(self, *, wrong: set[tuple[str, int, str]]) -> None:
+        import torch
+
+        for seed in (42, 43, 44):
+            run = self.rine_root / f"seed_{seed}"
+            run.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "stage": "controlled_rine_robustness", "seed": seed,
+                    "matching_policy": "fixed_q96", "threshold": 0.5,
+                    "transform_cells": list(STAGE1_CELL_IDS) + ["noise_sigma_0.02"],
+                    "manifest_sha256": "controlled-rine-manifest-hash",
+                },
+                run / "best_50_50.pt",
+            )
+            path = run / "best_50_50_predictions.csv"
+            with path.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(
+                    stream,
+                    fieldnames=(
+                        "sample_id", "source_id", "parent_id", "split", "label",
+                        "logit", "probability", "checkpoint", "seed",
+                        "matching_policy", "transform", "transform_parameter",
+                        "dataset_name", "generator_name", "generator_checkpoint",
+                        "capture_source",
+                    ),
+                )
+                writer.writeheader()
+                for label, parent_id in _PARENTS:
+                    probability = _probability_for(label, correct=True)
+                    writer.writerow(
+                        {
+                            "sample_id": parent_id, "source_id": label, "parent_id": parent_id,
+                            "split": "selection_val", "label": label,
+                            "logit": "1" if probability >= 0.5 else "-1", "probability": probability,
+                            "checkpoint": "controlled_rine", "seed": seed,
+                            "matching_policy": "fixed_q96", "transform": "clean",
+                            "transform_parameter": "", "dataset_name": "fixture",
+                            "generator_name": "unknown", "generator_checkpoint": "unknown",
+                            "capture_source": "unknown",
+                        }
+                    )
+                for cell_id in STAGE1_CELL_IDS:
+                    for label, parent_id in _PARENTS:
+                        correct = (cell_id, seed, label) not in wrong
+                        probability = _probability_for(label, correct=correct)
+                        writer.writerow(
+                            {
+                                "sample_id": f"{parent_id}__{cell_id}", "source_id": label,
+                                "parent_id": parent_id, "split": "selection_val", "label": label,
+                                "logit": "1" if probability >= 0.5 else "-1", "probability": probability,
+                                "checkpoint": "controlled_rine", "seed": seed,
+                                "matching_policy": "fixed_q96", "transform": "benchmark",
+                                "transform_parameter": json.dumps({"cell_id": cell_id}),
+                                "dataset_name": "fixture", "generator_name": "unknown",
+                                "generator_checkpoint": "unknown", "capture_source": "unknown",
+                            }
+                        )
+
+    def test_retains_only_when_locked_score_and_every_regression_gate_pass(self) -> None:
+        report = compare_texture_stage1(**self.comparison_args)
+
+        self.assertEqual(report["decision"], "retain_texture_for_full_robustness")
+        self.assertGreater(report["comparators"]["global_only"]["locked_score_delta"], 0.0)
+        self.assertGreater(report["comparators"]["controlled_rine"]["locked_score_delta"], 0.0)
+
+    def test_recomputes_controlled_rine_on_the_exact_nine_cell_subset(self) -> None:
+        report = compare_texture_stage1(**self.comparison_args)
+
+        self.assertEqual(report["comparators"]["controlled_rine"]["cell_count"], 9)
+
+    def remove_one_controlled_rine_slice(self) -> None:
+        (self.rine_root / "seed_43" / "best_50_50_predictions.csv").unlink()
+
+    def test_missing_or_mismatched_controlled_rine_blocks_comparison(self) -> None:
+        self.remove_one_controlled_rine_slice()
+
+        with self.assertRaises(TextureRobustnessPrerequisiteError):
+            compare_texture_stage1(**self.comparison_args)
+
+    def gate_mutations(self, comparator: str) -> list[Callable[[], None]]:
+        def equalize_locked_score() -> None:
+            if comparator == "controlled_rine":
+                self._write_rine_predictions(wrong=set())
+            else:
+                self._write_variant_predictions(comparator, wrong=set())
+
+        def regress_treatment_authentic_accuracy() -> None:
+            self._write_variant_predictions(
+                "global_local", wrong={(STAGE1_CELL_IDS[0], 42, "authentic")}
+            )
+
+        def regress_treatment_single_cell() -> None:
+            wrong = {
+                (STAGE1_CELL_IDS[0], seed, label)
+                for seed in (42, 43, 44) for label, _ in _PARENTS
+            }
+            self._write_variant_predictions("global_local", wrong=wrong)
+
+        return [
+            equalize_locked_score,
+            regress_treatment_authentic_accuracy,
+            regress_treatment_single_cell,
+        ]
+
+    def test_rejects_each_gate_independently_against_either_comparator(self) -> None:
+        for comparator in ("global_only", "controlled_rine"):
+            for mutation in self.gate_mutations(comparator):
+                with self.subTest(comparator=comparator, mutation=mutation.__name__):
+                    self.reset_comparison_fixture()
+                    mutation()
+                    self.assertEqual(
+                        compare_texture_stage1(**self.comparison_args)["decision"],
+                        "reject_texture_robustness_stage1",
+                    )
+
+    def test_publishes_report_artifacts_and_manifest_last(self) -> None:
+        output_root = self.root / "reports-output"
+
+        report = compare_texture_stage1(**self.comparison_args, output_root=output_root)
+
+        self.assertTrue((output_root / "reports" / "robustness_comparison.json").is_file())
+        self.assertTrue((output_root / "reports" / "per_cell_metrics.csv").is_file())
+        self.assertTrue((output_root / "reports" / "per_seed_robustness.csv").is_file())
+        self.assertTrue((output_root / "reports" / "failure_analysis.csv").is_file())
+        manifest = json.loads(
+            (output_root / "metadata" / "artifact_manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(manifest["decision"], report["decision"])
 
 
 if __name__ == "__main__":

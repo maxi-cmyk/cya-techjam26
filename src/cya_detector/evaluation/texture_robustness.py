@@ -7,8 +7,11 @@ import csv
 import hashlib
 import math
 import os
+import random
+import statistics
 import time
 import uuid
+from collections import defaultdict
 from contextlib import nullcontext
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -19,10 +22,11 @@ from PIL import Image
 import numpy as np
 
 from cya_detector.config import ConfigError
+from cya_detector.evaluation.metrics import binary_metrics
 from cya_detector.models.clip_baseline import load_frozen_clip, require_ml_dependencies
 from cya_detector.models.texture import build_texture_head
 from cya_detector.features.texture import prepare_texture_patch_views
-from cya_detector.predictions import read_predictions
+from cya_detector.predictions import PredictionRecord, prediction_from_row, read_predictions
 from cya_detector.data.manifest import (
     read_manifest,
     sha256_file,
@@ -74,6 +78,14 @@ _EVALUATION_FIELDS = (
 
 class TextureRobustnessError(RuntimeError):
     """Raised when the locked Stage-1 evaluation boundary is violated."""
+
+
+class TextureRobustnessPrerequisiteError(TextureRobustnessError):
+    """Raised when the retained controlled-RINE comparator cannot be verified.
+
+    A missing, incomplete, or hash-mismatched controlled-RINE artifact blocks the
+    comparison outright; it is never treated as a texture pass or rejection.
+    """
 
 
 @dataclass(frozen=True)
@@ -1093,3 +1105,455 @@ def evaluate_texture_stage1(
         "materialization_report_sha256": sha256_file(Path(materialization_report)),
         "extraction": extraction, "final_test_read": False,
     }
+
+
+_REPORT_FIELDS = (
+    "per_cell_metrics.csv", "per_seed_robustness.csv", "robustness_comparison.json",
+    "latency_and_memory.json", "failure_analysis.csv",
+)
+
+
+def _load_completed_texture_slice(
+    path: Path, metadata_path: Path, *, variant: str, seed: int, cell_id: str,
+) -> list[dict[str, str]]:
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TextureRobustnessError(f"Texture prediction slice is missing or unreadable: {path}") from exc
+    contract = metadata.get("contract")
+    if (
+        metadata.get("status") != "completed"
+        or not isinstance(contract, dict)
+        or contract.get("variant") != variant
+        or contract.get("seed") != seed
+        or contract.get("cell_id") != cell_id
+    ):
+        raise TextureRobustnessError(f"Texture prediction slice identity mismatch: {path}")
+    if not path.is_file() or metadata.get("csv_sha256") != sha256_file(path):
+        raise TextureRobustnessError(f"Texture prediction slice hash mismatch: {path}")
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    if (
+        not rows
+        or list(rows[0].keys()) != list(_EVALUATION_FIELDS)
+        or len(rows) != metadata.get("row_count")
+        or any(
+            not math.isfinite(float(row["logit"])) or not math.isfinite(float(row["probability"]))
+            for row in rows
+        )
+    ):
+        raise TextureRobustnessError(f"Texture prediction slice is malformed: {path}")
+    return rows
+
+
+def _require_texture_predictions(
+    robustness_root: Path, *, contract: RobustnessContract,
+) -> dict[str, list[PredictionRecord]]:
+    by_variant: dict[str, list[PredictionRecord]] = defaultdict(list)
+    for variant in contract.variants:
+        for seed in contract.seeds:
+            for cell_id in contract.cell_ids:
+                path = robustness_root / variant / f"seed_{seed}" / f"{cell_id}.csv"
+                metadata_path = path.with_suffix(".meta.json")
+                rows = _load_completed_texture_slice(
+                    path, metadata_path, variant=variant, seed=seed, cell_id=cell_id,
+                )
+                for row in rows:
+                    record = prediction_from_row(row)
+                    if record.evaluation_cell != cell_id:
+                        raise TextureRobustnessError(f"Texture prediction cell mismatch: {path}")
+                    by_variant[variant].append(record)
+    expected = len(contract.variants) * len(contract.seeds) * len(contract.cell_ids)
+    if len(by_variant) != len(contract.variants):
+        raise TextureRobustnessError("Stage-1 texture predictions do not cover every variant")
+    for variant in contract.variants:
+        parent_seed_cell_pairs = {
+            (row.parent_id, row.seed, row.evaluation_cell) for row in by_variant[variant]
+        }
+        if len(parent_seed_cell_pairs) != len(by_variant[variant]):
+            raise TextureRobustnessError(f"Duplicate texture predictions for variant {variant!r}")
+    if sum(len(rows) for rows in by_variant.values()) < expected:
+        raise TextureRobustnessError("Stage-1 texture predictions are incomplete")
+    return dict(by_variant)
+
+
+def _load_controlled_rine_seed(
+    root: Path, *, seed: int, cell_ids: tuple[str, ...], threshold: float,
+) -> list[PredictionRecord]:
+    torch, _, _ = require_ml_dependencies()
+    run = root / f"seed_{seed}"
+    checkpoint = run / "best_50_50.pt"
+    predictions_path = run / "best_50_50_predictions.csv"
+    if not checkpoint.is_file() or not predictions_path.is_file():
+        raise TextureRobustnessPrerequisiteError(f"Controlled-RINE artifacts are missing: {run}")
+    try:
+        state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    except (OSError, RuntimeError, EOFError) as exc:
+        raise TextureRobustnessPrerequisiteError(f"Controlled-RINE checkpoint is unreadable: {checkpoint}") from exc
+    transform_cells = state.get("transform_cells")
+    if (
+        state.get("stage") != "controlled_rine_robustness"
+        or state.get("seed") != seed
+        or state.get("matching_policy") != "fixed_q96"
+        or float(state.get("threshold", math.nan)) != threshold
+        or not isinstance(transform_cells, list)
+        or not set(cell_ids).issubset(set(transform_cells))
+        or not isinstance(state.get("manifest_sha256"), str)
+        or not state.get("manifest_sha256")
+    ):
+        raise TextureRobustnessPrerequisiteError(f"Controlled-RINE checkpoint provenance mismatch: {checkpoint}")
+    try:
+        rows = read_predictions(predictions_path)
+    except (OSError, ValueError) as exc:
+        raise TextureRobustnessPrerequisiteError(
+            f"Controlled-RINE predictions are unreadable: {predictions_path}"
+        ) from exc
+    if (
+        not rows
+        or {row.split for row in rows} != {"selection_val"}
+        or {row.seed for row in rows} != {seed}
+        or {row.matching_policy for row in rows} != {"fixed_q96"}
+    ):
+        raise TextureRobustnessPrerequisiteError(
+            f"Controlled-RINE predictions fail the Stage-1 provenance boundary: {predictions_path}"
+        )
+    observed_cells = {row.evaluation_cell for row in rows if row.evaluation_cell != "clean"}
+    if not set(cell_ids).issubset(observed_cells):
+        raise TextureRobustnessPrerequisiteError(
+            f"Controlled-RINE predictions are missing required Stage-1 cells: {predictions_path}"
+        )
+    if "clean" not in {row.evaluation_cell for row in rows}:
+        raise TextureRobustnessPrerequisiteError(
+            f"Controlled-RINE predictions lack clean rows: {predictions_path}"
+        )
+    return [row for row in rows if row.evaluation_cell == "clean" or row.evaluation_cell in cell_ids]
+
+
+def _cell_seed_metrics(
+    records: list[PredictionRecord], *, threshold: float,
+) -> dict[tuple[str, int], dict[str, Any]]:
+    groups: dict[tuple[str, int], list[PredictionRecord]] = defaultdict(list)
+    for row in records:
+        if row.evaluation_cell == "clean":
+            continue
+        groups[(row.evaluation_cell, row.seed)].append(row)
+    return {key: binary_metrics(rows, threshold=threshold) for key, rows in groups.items()}
+
+
+def _clean_metrics_by_seed(
+    records: list[PredictionRecord], *, threshold: float,
+) -> dict[int, dict[str, Any]]:
+    groups: dict[int, list[PredictionRecord]] = defaultdict(list)
+    for row in records:
+        if row.evaluation_cell == "clean":
+            groups[row.seed].append(row)
+    return {seed: binary_metrics(rows, threshold=threshold) for seed, rows in groups.items()}
+
+
+def _mean(values: list[float]) -> float:
+    if not values:
+        raise TextureRobustnessError("Cannot average an empty Stage-1 metric series")
+    return statistics.fmean(values)
+
+
+def _summarize_comparator(
+    *, cell_seed_metrics: dict[tuple[str, int], dict[str, Any]],
+    clean_by_seed: dict[int, dict[str, Any]], cell_ids: tuple[str, ...], seeds: tuple[int, ...],
+) -> dict[str, Any]:
+    clean_accuracy = _mean([clean_by_seed[seed]["accuracy"] for seed in seeds])
+    robustness_accuracy = _mean([metrics["accuracy"] for metrics in cell_seed_metrics.values()])
+    mean_authentic_accuracy = _mean(
+        [metrics["authentic_accuracy"] for metrics in cell_seed_metrics.values()]
+    )
+    mean_ai_generated_accuracy = _mean(
+        [metrics["ai_generated_accuracy"] for metrics in cell_seed_metrics.values()]
+    )
+    locked_score = 0.5 * clean_accuracy + 0.5 * robustness_accuracy
+    cell_averaged: dict[str, dict[str, float]] = {}
+    for cell_id in cell_ids:
+        seed_metrics = [cell_seed_metrics[(cell_id, seed)] for seed in seeds]
+        cell_averaged[cell_id] = {
+            "accuracy": _mean([metric["accuracy"] for metric in seed_metrics]),
+            "authentic_accuracy": _mean([metric["authentic_accuracy"] for metric in seed_metrics]),
+            "ai_generated_accuracy": _mean(
+                [metric["ai_generated_accuracy"] for metric in seed_metrics]
+            ),
+        }
+    return {
+        "cell_count": len(cell_ids),
+        "clean_accuracy": clean_accuracy,
+        "robustness_accuracy": robustness_accuracy,
+        "mean_authentic_accuracy": mean_authentic_accuracy,
+        "mean_ai_generated_accuracy": mean_ai_generated_accuracy,
+        "locked_50_50_score": locked_score,
+        "cell_averaged_metrics": cell_averaged,
+    }
+
+
+def _paired_bootstrap_delta_ci(
+    treatment: list[PredictionRecord], control: list[PredictionRecord], *, threshold: float,
+    iterations: int = 1000, seed: int = 0,
+) -> dict[str, float]:
+    by_unit_treatment = {(row.parent_id, row.evaluation_cell, row.seed): row for row in treatment}
+    by_unit_control = {(row.parent_id, row.evaluation_cell, row.seed): row for row in control}
+    shared_units = sorted(set(by_unit_treatment) & set(by_unit_control))
+    if not shared_units:
+        raise TextureRobustnessError("Paired bootstrap requires at least one shared prediction unit")
+    treatment_correct = [
+        int((by_unit_treatment[unit].probability >= threshold) == by_unit_treatment[unit].target)
+        for unit in shared_units
+    ]
+    control_correct = [
+        int((by_unit_control[unit].probability >= threshold) == by_unit_control[unit].target)
+        for unit in shared_units
+    ]
+    observed_delta = statistics.fmean(treatment_correct) - statistics.fmean(control_correct)
+    rng = random.Random(seed)
+    deltas: list[float] = []
+    count = len(shared_units)
+    for _ in range(iterations):
+        indices = [rng.randrange(count) for _ in range(count)]
+        deltas.append(
+            statistics.fmean(treatment_correct[index] for index in indices)
+            - statistics.fmean(control_correct[index] for index in indices)
+        )
+    deltas.sort()
+    lower = deltas[int(0.025 * (iterations - 1))]
+    upper = deltas[int(0.975 * (iterations - 1))]
+    return {"observed_delta": observed_delta, "ci_lower": lower, "ci_upper": upper}
+
+
+def compare_texture_stage1(
+    *, clean_experiment_root: Path, robustness_root: Path, controlled_rine_root: Path,
+    config: dict[str, Any], output_root: Path | None = None,
+) -> dict[str, Any]:
+    """Recompute the nine-cell controlled-RINE comparator and gate texture Stage 1."""
+
+    contract = validate_robustness_contract(config)
+    threshold = float(config["evaluation"]["threshold"])
+    if not 0.0 < threshold < 1.0:
+        raise TextureRobustnessError("Clean threshold must remain strictly between zero and one")
+
+    by_variant = _require_texture_predictions(Path(robustness_root), contract=contract)
+
+    clean_by_seed_variant: dict[str, dict[int, dict[str, Any]]] = {}
+    checkpoint_hashes: dict[str, str] = {}
+    for variant in contract.variants:
+        per_seed: dict[int, dict[str, Any]] = {}
+        for seed in contract.seeds:
+            _, checkpoint_hash, clean, *_ = _load_clean_run(
+                Path(clean_experiment_root), variant=variant, seed=seed, threshold=threshold,
+            )
+            checkpoint_hashes[f"{variant}/seed_{seed}"] = checkpoint_hash
+            per_seed[seed] = binary_metrics(list(clean.values()), threshold=threshold)
+        clean_by_seed_variant[variant] = per_seed
+
+    controlled_rine_hashes: dict[str, str] = {}
+    controlled_rine_records: list[PredictionRecord] = []
+    for seed in contract.seeds:
+        controlled_rine_records.extend(
+            _load_controlled_rine_seed(
+                Path(controlled_rine_root), seed=seed, cell_ids=contract.cell_ids, threshold=threshold,
+            )
+        )
+        controlled_rine_hashes[f"seed_{seed}/best_50_50.pt"] = sha256_file(
+            Path(controlled_rine_root) / f"seed_{seed}" / "best_50_50.pt"
+        )
+        controlled_rine_hashes[f"seed_{seed}/best_50_50_predictions.csv"] = sha256_file(
+            Path(controlled_rine_root) / f"seed_{seed}" / "best_50_50_predictions.csv"
+        )
+    controlled_rine_units = {
+        (row.parent_id, row.evaluation_cell, row.seed)
+        for row in controlled_rine_records
+        if row.evaluation_cell != "clean"
+    }
+    texture_units = {
+        (row.parent_id, row.evaluation_cell, row.seed)
+        for row in by_variant[contract.variants[0]]
+    }
+    if controlled_rine_units != texture_units:
+        raise TextureRobustnessPrerequisiteError(
+            "Controlled-RINE nine-cell predictions do not align with the Stage-1 texture parents"
+        )
+
+    comparators: dict[str, dict[str, Any]] = {}
+    per_variant_summary: dict[str, dict[str, Any]] = {}
+    for variant in contract.variants:
+        per_variant_summary[variant] = _summarize_comparator(
+            cell_seed_metrics=_cell_seed_metrics(by_variant[variant], threshold=threshold),
+            clean_by_seed=clean_by_seed_variant[variant],
+            cell_ids=contract.cell_ids,
+            seeds=contract.seeds,
+        )
+    controlled_rine_summary = _summarize_comparator(
+        cell_seed_metrics=_cell_seed_metrics(controlled_rine_records, threshold=threshold),
+        clean_by_seed=_clean_metrics_by_seed(controlled_rine_records, threshold=threshold),
+        cell_ids=contract.cell_ids,
+        seeds=contract.seeds,
+    )
+
+    treatment = "global_local"
+    treatment_records = by_variant[treatment]
+    treatment_summary = per_variant_summary[treatment]
+    gate_conditions: list[bool] = []
+    for comparator_name in contract.controlling_comparators:
+        comparator_summary = per_variant_summary.get(comparator_name, controlled_rine_summary)
+        comparator_records = by_variant.get(comparator_name, controlled_rine_records)
+        locked_score_delta = treatment_summary["locked_50_50_score"] - comparator_summary["locked_50_50_score"]
+        robustness_delta = treatment_summary["robustness_accuracy"] - comparator_summary["robustness_accuracy"]
+        authentic_delta = (
+            treatment_summary["mean_authentic_accuracy"] - comparator_summary["mean_authentic_accuracy"]
+        )
+        ai_generated_delta = (
+            treatment_summary["mean_ai_generated_accuracy"]
+            - comparator_summary["mean_ai_generated_accuracy"]
+        )
+        worst_cell_deltas: dict[str, dict[str, float]] = {}
+        worst_cell_ok = True
+        for cell_id in contract.cell_ids:
+            treatment_cell = treatment_summary["cell_averaged_metrics"][cell_id]
+            comparator_cell = comparator_summary["cell_averaged_metrics"][cell_id]
+            deltas = {
+                key: treatment_cell[key] - comparator_cell[key]
+                for key in ("accuracy", "authentic_accuracy", "ai_generated_accuracy")
+            }
+            worst_cell_deltas[cell_id] = deltas
+            if any(value < -contract.worst_cell_tolerance for value in deltas.values()):
+                worst_cell_ok = False
+        bootstrap = _paired_bootstrap_delta_ci(
+            treatment_records, comparator_records, threshold=threshold, seed=hash(comparator_name) % (2**31),
+        )
+        corrected = introduced = 0
+        by_treatment = {
+            (row.parent_id, row.evaluation_cell, row.seed): row for row in treatment_records
+        }
+        by_comparator = {
+            (row.parent_id, row.evaluation_cell, row.seed): row for row in comparator_records
+        }
+        for unit in sorted(set(by_treatment) & set(by_comparator)):
+            treatment_row = by_treatment[unit]
+            comparator_row = by_comparator[unit]
+            treatment_correct = (treatment_row.probability >= threshold) == treatment_row.target
+            comparator_correct = (comparator_row.probability >= threshold) == comparator_row.target
+            if treatment_correct and not comparator_correct:
+                corrected += 1
+            elif comparator_correct and not treatment_correct:
+                introduced += 1
+        comparator_passes = (
+            locked_score_delta > 0.0
+            and robustness_delta >= 0.0
+            and authentic_delta >= -contract.aggregate_class_tolerance
+            and ai_generated_delta >= -contract.aggregate_class_tolerance
+            and worst_cell_ok
+        )
+        gate_conditions.append(comparator_passes)
+        comparators[comparator_name] = {
+            "cell_count": comparator_summary["cell_count"],
+            "clean_accuracy": comparator_summary["clean_accuracy"],
+            "robustness_accuracy": comparator_summary["robustness_accuracy"],
+            "locked_50_50_score": comparator_summary["locked_50_50_score"],
+            "locked_score_delta": locked_score_delta,
+            "robustness_accuracy_delta": robustness_delta,
+            "mean_authentic_accuracy_delta": authentic_delta,
+            "mean_ai_generated_accuracy_delta": ai_generated_delta,
+            "worst_cell_deltas": worst_cell_deltas,
+            "worst_cell_gate_passes": worst_cell_ok,
+            "bootstrap": bootstrap,
+            "corrected_errors": corrected,
+            "introduced_errors": introduced,
+            "gate_passes": comparator_passes,
+        }
+
+    decision = (
+        "retain_texture_for_full_robustness"
+        if all(gate_conditions)
+        else "reject_texture_robustness_stage1"
+    )
+
+    report: dict[str, Any] = {
+        "status": "completed",
+        "decision": decision,
+        "threshold": threshold,
+        "aggregate_class_tolerance": contract.aggregate_class_tolerance,
+        "worst_cell_tolerance": contract.worst_cell_tolerance,
+        "variants": per_variant_summary,
+        "comparators": comparators,
+        "final_test_read": False,
+    }
+
+    if output_root is not None:
+        output_root = Path(output_root)
+        reports_dir = output_root / "reports"
+        per_cell_rows = []
+        for variant in contract.variants:
+            for cell_id in contract.cell_ids:
+                metrics = per_variant_summary[variant]["cell_averaged_metrics"][cell_id]
+                per_cell_rows.append(
+                    {"variant": variant, "cell_id": cell_id, **metrics}
+                )
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        with (reports_dir / "per_cell_metrics.csv").open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(
+                stream, fieldnames=["variant", "cell_id", "accuracy", "authentic_accuracy", "ai_generated_accuracy"]
+            )
+            writer.writeheader()
+            writer.writerows(per_cell_rows)
+
+        per_seed_rows = []
+        for variant in contract.variants:
+            cell_seed_metrics = _cell_seed_metrics(by_variant[variant], threshold=threshold)
+            for seed in contract.seeds:
+                accuracies = [
+                    cell_seed_metrics[(cell_id, seed)]["accuracy"] for cell_id in contract.cell_ids
+                ]
+                per_seed_rows.append(
+                    {
+                        "variant": variant, "seed": seed,
+                        "clean_accuracy": clean_by_seed_variant[variant][seed]["accuracy"],
+                        "robustness_accuracy": _mean(accuracies),
+                    }
+                )
+        with (reports_dir / "per_seed_robustness.csv").open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(
+                stream, fieldnames=["variant", "seed", "clean_accuracy", "robustness_accuracy"]
+            )
+            writer.writeheader()
+            writer.writerows(per_seed_rows)
+
+        write_json(reports_dir / "robustness_comparison.json", report)
+        write_json(
+            reports_dir / "latency_and_memory.json",
+            {"note": "latency and memory are recorded per prediction slice metadata"},
+        )
+        with (reports_dir / "failure_analysis.csv").open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(
+                stream, fieldnames=["comparator", "corrected_errors", "introduced_errors"]
+            )
+            writer.writeheader()
+            for name, values in comparators.items():
+                writer.writerow(
+                    {
+                        "comparator": name,
+                        "corrected_errors": values["corrected_errors"],
+                        "introduced_errors": values["introduced_errors"],
+                    }
+                )
+
+        manifest_dir = output_root / "metadata"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        artifact_hashes = {
+            name: sha256_file(reports_dir / name) for name in _REPORT_FIELDS
+        }
+        write_json(
+            manifest_dir / "artifact_manifest.json",
+            {
+                "status": "completed",
+                "decision": decision,
+                "checkpoint_sha256": checkpoint_hashes,
+                "controlled_rine_sha256": controlled_rine_hashes,
+                "report_sha256": artifact_hashes,
+                "final_test_read": False,
+            },
+        )
+
+    return report
