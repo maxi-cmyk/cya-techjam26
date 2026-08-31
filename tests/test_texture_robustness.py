@@ -502,6 +502,10 @@ class TextureRobustnessEvaluationTests(unittest.TestCase):
                             "seed": seed,
                             "matching_policy": "fixed_q96",
                             "optimization": {"threshold": 0.5},
+                            "run_configuration": {
+                                "texture": {"experiment_name": "clean_pilot_v1"},
+                                "evaluation": {"threshold": 0.5},
+                            },
                             "artifact_sha256": {
                                 "checkpoints/best_clean.pt": hashlib.sha256(
                                     checkpoint.read_bytes()
@@ -584,6 +588,45 @@ class TextureRobustnessEvaluationTests(unittest.TestCase):
         ):
             repaired = evaluate_texture_stage1(**self.evaluation_args)
         self.assertEqual(repaired["resumed_slices"], 80)
+
+    def test_changed_clean_predictions_or_run_configuration_invalidate_nine_slices(self) -> None:
+        run = self.clean_root / "global_only" / "seed_42"
+        predictions = run / "predictions" / "selection_val.csv"
+        metadata_path = run / "metadata" / "run_metadata.json"
+        with patch(
+            "cya_detector.evaluation.texture_robustness._extract_transformed_feature_bank",
+            side_effect=self._fake_features,
+        ):
+            evaluate_texture_stage1(**self.evaluation_args)
+            with predictions.open(newline="", encoding="utf-8") as stream:
+                rows = list(csv.DictReader(stream))
+            rows[0]["probability"] = "0.125"
+            with predictions.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=rows[0])
+                writer.writeheader()
+                writer.writerows(rows)
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["artifact_sha256"]["predictions/selection_val.csv"] = hashlib.sha256(
+                predictions.read_bytes()
+            ).hexdigest()
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            replaced = evaluate_texture_stage1(**self.evaluation_args)
+
+        self.assertEqual(replaced["resumed_slices"], 72)
+        cell = self.prediction_root / "global_only" / "seed_42" / "jpeg_q90.csv"
+        with cell.open(newline="", encoding="utf-8") as stream:
+            updated_rows = list(csv.DictReader(stream))
+        authentic = next(row for row in updated_rows if row["label"] == "authentic")
+        self.assertEqual(float(authentic["paired_clean_probability"]), 0.125)
+
+        metadata["run_configuration"]["evaluation"]["threshold_note"] = "review-fix"
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        with patch(
+            "cya_detector.evaluation.texture_robustness._extract_transformed_feature_bank",
+            side_effect=self._fake_features,
+        ):
+            config_replaced = evaluate_texture_stage1(**self.evaluation_args)
+        self.assertEqual(config_replaced["resumed_slices"], 72)
 
     def test_rejects_forbidden_split_before_feature_extraction_or_publication(self) -> None:
         rows = read_manifest(self.output_manifest)
@@ -703,6 +746,79 @@ class TextureRobustnessEvaluationTests(unittest.TestCase):
             "patch_size", "patch_count", "patch_boxes",
         ):
             self.assertIn(key, cache_contract)
+
+    def test_malformed_matching_caches_are_rejected_and_reextracted(self) -> None:
+        import torch
+
+        manifest_rows = read_manifest(self.output_manifest)[:1]
+
+        class FakeProcessor:
+            def __call__(self, *, images, return_tensors):
+                return {"pixel_values": torch.ones((1, 3, 8, 8))}
+
+        class FakeModel:
+            def __init__(self):
+                self.config = type(
+                    "Config", (), {"num_hidden_layers": 24, "hidden_size": 3}
+                )()
+                self.encoded_image_count = 0
+
+            def __call__(
+                self, *, pixel_values, output_hidden_states=False, return_dict=False
+            ):
+                batch = pixel_values.shape[0]
+                self.encoded_image_count += batch
+                result = type("Output", (), {})()
+                result.image_embeds = torch.ones((batch, 3))
+                if output_hidden_states:
+                    result.hidden_states = tuple(
+                        torch.ones((batch, 1, 3)) * index for index in range(25)
+                    )
+                return result
+
+        model = FakeModel()
+        loaded = LoadedClip(
+            model=model, processor=FakeProcessor(), identifier="fixture/clip",
+            requested_revision="main", resolved_revision="b" * 40,
+            embedding_dimension=3,
+        )
+        extractor_args = {
+            "transformed_manifest": self.output_manifest,
+            "rows": manifest_rows,
+            "cache_root": self.cache_root,
+            "config": self.config,
+            "device": "cpu",
+        }
+        with patch(
+            "cya_detector.evaluation.texture_robustness.load_frozen_clip",
+            return_value=loaded,
+        ):
+            robustness_module._extract_transformed_feature_bank(**extractor_args)
+            global_path = next((self.cache_root / "global").rglob("*.pt"))
+            patch_path = next((self.cache_root / "patch").rglob("*.pt"))
+            global_payload = torch.load(global_path, weights_only=True)
+            patch_payload = torch.load(patch_path, weights_only=True)
+            global_payload["global_features"] = torch.ones((3, 3))
+            patch_payload["patch_features"] = torch.ones((3, 3))
+            patch_payload["patch_boxes"] = [[99, 99, 112, 112]]
+            patch_payload["patch_mask"] = torch.tensor([True, False, False, False])
+            torch.save(global_payload, global_path)
+            torch.save(patch_payload, patch_path)
+            _, repaired = robustness_module._extract_transformed_feature_bank(**extractor_args)
+
+        self.assertEqual(repaired["cache_hit_count"], 0)
+        repaired_global = torch.load(global_path, weights_only=True)
+        repaired_patch = torch.load(patch_path, weights_only=True)
+        self.assertEqual(tuple(repaired_global["global_features"].shape), (4, 3))
+        self.assertEqual(tuple(repaired_patch["patch_features"].shape), (4, 3))
+        self.assertEqual(
+            repaired_patch["patch_boxes"],
+            repaired_patch["cache_contract"]["patch_boxes"],
+        )
+        self.assertEqual(
+            repaired_patch["patch_mask"].tolist(),
+            repaired_patch["cache_contract"]["availability_mask"],
+        )
 
 
 if __name__ == "__main__":

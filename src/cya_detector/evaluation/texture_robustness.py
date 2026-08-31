@@ -627,18 +627,27 @@ def _load_valid_cache(path: Path, *, contract: dict[str, Any], kind: str) -> Any
             return None
         if kind == "global":
             value = payload["global_features"]
-            valid = value.ndim == 2 and value.dtype.is_floating_point
+            valid = (
+                tuple(value.shape)
+                == (contract["global_layer_count"], contract["global_hidden_dimension"])
+                and value.dtype.is_floating_point
+            )
         else:
             value, mask = payload["patch_features"], payload["patch_mask"]
             valid = (
-                value.ndim == 2 and value.dtype.is_floating_point and mask.ndim == 1
-                and mask.dtype == torch.bool and value.shape[0] == mask.shape[0]
+                tuple(value.shape)
+                == (contract["patch_count"], contract["patch_embedding_dimension"])
+                and value.dtype.is_floating_point
+                and tuple(mask.shape) == (contract["patch_count"],)
+                and mask.dtype == torch.bool
+                and mask.tolist() == contract["availability_mask"]
+                and payload.get("patch_boxes") == contract["patch_boxes"]
                 and bool(mask.any())
             )
         if not valid or not bool(torch.isfinite(value).all()):
             return None
         return payload
-    except (OSError, KeyError, RuntimeError, TypeError, ValueError):
+    except (AttributeError, OSError, KeyError, RuntimeError, TypeError, ValueError):
         return None
 
 
@@ -701,6 +710,10 @@ def _extract_transformed_feature_bank(
                 "patch_count": patch_count,
                 "patch_boxes": [list(box) for box in views.patch_boxes],
                 "layers": list(selected_layers),
+                "global_layer_count": len(selected_layers),
+                "global_hidden_dimension": int(loaded.model.config.hidden_size),
+                "patch_embedding_dimension": loaded.embedding_dimension,
+                "availability_mask": list(views.availability_mask),
             }
             contract_hash = _canonical_sha256(contract)
             global_path = _cache_path(cache_root, "global", contract_hash)
@@ -828,7 +841,7 @@ def _extract_transformed_feature_bank(
 
 def _load_clean_run(
     root: Path, *, variant: str, seed: int, threshold: float
-) -> tuple[Path, str, dict[str, Any]]:
+) -> tuple[Path, str, dict[str, Any], str, str, str]:
     run = root / variant / f"seed_{seed}"
     checkpoint = run / "checkpoints" / "best_clean.pt"
     predictions = run / "predictions" / "selection_val.csv"
@@ -858,13 +871,23 @@ def _load_clean_run(
         or float(optimization.get("threshold", math.nan)) != threshold
     ):
         raise TextureRobustnessError(f"Clean Task 9 threshold mismatch: {run}")
+    run_configuration = metadata.get("run_configuration")
+    if not isinstance(run_configuration, dict):
+        raise TextureRobustnessError(f"Clean Task 9 run lacks configuration provenance: {run}")
     clean_rows = read_predictions(predictions)
     if (
         not clean_rows or any(row.split != "selection_val" or row.transform != "clean" for row in clean_rows)
         or len({row.sample_id for row in clean_rows}) != len(clean_rows)
     ):
         raise TextureRobustnessError(f"Clean Task 9 predictions are invalid: {predictions}")
-    return checkpoint, sha256_file(checkpoint), {row.sample_id: row for row in clean_rows}
+    return (
+        checkpoint,
+        sha256_file(checkpoint),
+        {row.sample_id: row for row in clean_rows},
+        sha256_file(predictions),
+        sha256_file(metadata_path),
+        _canonical_sha256(run_configuration),
+    )
 
 
 def _valid_prediction_slice(path: Path, metadata_path: Path, contract: dict[str, Any]) -> bool:
@@ -954,7 +977,10 @@ def evaluate_texture_stage1(
     checkpoint_hashes: dict[Path, str] = {}
     for variant in contract.variants:
         for seed in contract.seeds:
-            checkpoint, checkpoint_hash, clean = _load_clean_run(
+            (
+                checkpoint, checkpoint_hash, clean, clean_predictions_hash,
+                clean_metadata_hash, clean_configuration_hash,
+            ) = _load_clean_run(
                 Path(clean_experiment_root), variant=variant, seed=seed,
                 threshold=threshold,
             )
@@ -989,6 +1015,9 @@ def evaluate_texture_stage1(
                     "variant": variant, "seed": seed, "cell_id": cell_id,
                     "checkpoint_sha256": checkpoint_hash, "threshold": threshold,
                     "calibration": "unchanged_clean_raw_sigmoid",
+                    "clean_predictions_sha256": clean_predictions_hash,
+                    "clean_run_metadata_sha256": clean_metadata_hash,
+                    "clean_run_configuration_sha256": clean_configuration_hash,
                     "feature_contract_sha256": _canonical_sha256(
                         sorted(row["cache_contract_sha256"] for row in selected)
                     ),
