@@ -1,10 +1,10 @@
-# Training and Fine-Tuning Plan
+# Training runbook and recorded outcomes
 
-This document is the operational runbook for training, fine-tuning, calibrating, and selecting the binary `authentic` versus `ai_generated` detector. It implements the product boundary in `PRD.md`, the architecture in `design.md`, and the components in `models.md` and `techStack.md`.
+This document records the operational training contract and the resulting model decisions for the binary `authentic` versus `ai_generated` detector. It implements the product boundary in [PRD.md](../product/PRD.md), the architecture in [design.md](../architecture/design.md), and the components in [models.md](../architecture/models.md) and [techStack.md](../architecture/techStack.md). Historical procedures remain here for reproducibility; the retained baseline is already frozen.
 
 ## 1. Training Objectives and Non-Negotiable Rules
 
-The model produces one logit and one calibrated public value: `pred = P(ai_generated)`.
+The model produces one logit and one public value, `pred = sigmoid(logit)`. Temperature fitting was attempted after checkpoint selection but rejected as degenerate, so the shipped baseline uses `T=1` and threshold `0.5`; `pred` is a raw model probability-like score, not a separately calibrated probability guarantee.
 
 Training must preserve these rules:
 
@@ -29,15 +29,15 @@ The architecture is trainable, but the word **parameter** must be used carefully
 
 | Component | What is learned | Supervision currently available | Feasibility decision |
 |---|---|---|---|
-| Frozen CLIP baseline | Linear/MLP binary head | Binary authentic/AI labels | **Ready once data and pretrained weights are acquired** |
-| RINE-style layer fusion | Layer-importance estimator and binary head | Binary authentic/AI labels | **Trainable** with CLIP frozen |
-| Texture path | Patch aggregation/attention and fusion weights | Binary labels on clean and independently transformed views | **Trainable**, but patch selection itself is deterministic and patch count/size are validation hyperparameters |
-| Frequency path | Feature projection, fusion weights, and an optional frequency-only classifier | Binary labels plus generator/decoder metadata for stratified validation | **Trainable as an auxiliary path**; FFT/DCT and residual statistics themselves have no learned weights |
+| Frozen CLIP baseline | Linear binary head | Binary authentic/AI labels | **Completed baseline**: 94.71% three-seed mean locked score; superseded by controlled RINE |
+| RINE-style layer fusion | Layer-importance estimator and binary head | Binary authentic/AI labels | **Completed and retained**: 100.00% clean, 99.62% robustness, and 99.81% mean locked score with CLIP frozen; seed 42 is packaged |
+| Texture path | Patch aggregation/attention and fusion weights | Binary labels on clean views; frozen-checkpoint robustness evaluation | **Completed and rejected**: clean gate passed, but `global_local` reached 93.13% Stage-1 robustness versus 99.80% controlled RINE |
+| Frequency path | Feature projection, fusion weights, and a frequency-only classifier | Binary labels plus generator/decoder metadata for stratified validation | **Completed and rejected for fusion**: 52.15% mean locked versus 99.81% parent; extractor outputs remain diagnostic only |
 | Reference-free PRNU-v2 path | Feature projection and fusion weights | Binary labels on clean and independent-transform rows | **Completed and rejected**: 78.09% PRNU-only locked score; RINE+PRNU 33.43% mean versus 99.81% parent after two-seed collapse; known-device fingerprints/PCE remain separate evidence and never become classifier inputs |
-| RGB/Lab correlation path | Feature projection and fusion weights | Binary labels on matched jitter distributions | **Trainable as fusion**; channel-correlation extraction remains deterministic |
-| Chromatic-aberration/radial-distortion path | Feature projection and fusion weights | Binary labels and extractor confidence, but no lens/camera calibration ground truth | **Trainable as fusion only**; the optical fit must remain deterministic or be validated on a separate calibrated dataset |
-| Stage 1 early exit | Frequency-only scorer and a fixed threshold selected on validation | Binary labels, held-out generator strata, and independent transforms | **Possible but disabled by default** until the precision/coverage gate passes |
-| Temperature scaling | One scalar temperature | Clean `selection_val` logits and labels | **Trainable after checkpoint selection** |
+| RGB/Lab correlation path | Feature projection and fusion weights | Binary labels on matched jitter distributions | **Completed and rejected for fusion**: Lab was the best clean color vector, but RINE+Lab scored 98.95% locked and breached the AI-generated regression gate |
+| Chromatic-aberration/radial-distortion path | Feature projection and fusion weights | Requires independently calibrated optical evidence before binary fusion | **Not eligible on current data**: calibrated lens/focal/edge-rich coverage is absent; radial distortion also lacks line/arc support |
+| Stage 1 early exit | Frequency-only scorer and a fixed threshold selected on validation | Binary labels, held-out generator strata, and independent transforms | **Disabled**: the frequency branch did not pass its retention and enablement gates |
+| Temperature scaling | One scalar temperature | Clean `selection_val` logits and labels | **Attempted and not retained**: the error-free 165-row clean set drove the fit to the 0.05 lower bound; baseline remains `T=1` |
 | Selective CLIP fine-tuning | Adapters or final vision blocks | Binary labels | **Conditional** on an actual GPU/VRAM/time check; not required for the viable baseline |
 | ConvNeXt-Tiny comparison | Full comparison model | Binary labels | **Possible but optional** and lower priority than proving the frozen-CLIP pipeline |
 | C2PA verification | Nothing | Signed provenance manifest | **Not a training task** |
@@ -53,11 +53,11 @@ The named datasets do not support every feature equally:
 |---|---|---|
 | SID_Set | Primary high-resolution binary pool after filtering | Keep only authentic and fully synthetic rows; exclude its tampered class entirely |
 | PREMIER v3 N1/N2 accessible; N3 optional | Task 8B native authentic pool for device-grouped PRNU work | Accept only licensed native/minimally processed images with device IDs; preserve RAW/HEIC but defer them until decoding is pinned |
-| GenImage | Binary training/evaluation and generator holdouts | Preserve generator subsets and source grouping; do not treat multiple derivatives as independent sources |
-| WildFake | Generator/architecture/version stratification | Acquire and verify the exact released hierarchy/licenses, then retain only fully synthetic and authentic branches |
-| CIFAKE | Low-resolution stress test or quick backbone smoke test | Its 32x32 sources are ineligible for PRNU, chromatic aberration, radial distortion, CFA periodicity, and primary texture training; upscaling does not recreate those signals |
-| COCO plus DALL-E benchmark subsets | External clean/robustness comparison | Validation-only as already declared; never use for head fitting, calibration, or feature selection |
-| Chameleon | Final stress-test comparison | Do not use for training or retention decisions |
+| GenImage | Task 8B synthetic pool only | The completed pilot used AI branches under the non-commercial research assumption; preserve generator grouping and never treat derivatives as independent sources |
+| WildFake | Optional future generator-stratified experiment | Not acquired or used in the frozen baseline; verify the exact hierarchy and licenses before any use |
+| CIFAKE | Optional low-resolution stress test | Not used in the frozen baseline; 32x32 sources are ineligible for physical or primary texture claims, and upscaling cannot recreate those signals |
+| COCO plus DALL-E benchmark subsets | Optional external comparison | Not used for fitting, calibration, or final model selection |
+| Chameleon | Optional external stress test | Not used for training or retention decisions |
 
 Every row must include a per-feature eligibility mask derived from source resolution, provenance, processing history when known, and extractor support. Eligibility rules are fixed before model comparison and applied identically to both labels. Low-resolution images may still train the CLIP head, but they must not teach the fusion head that a missing physical feature implies either class.
 
@@ -78,29 +78,22 @@ reference fingerprints may be prepared for controlled PRNU comparison, but no
 binary physical-fusion head may be fitted until label-independent export matching
 reduces the nuisance balanced accuracy to the predeclared limit.
 
-The completed local Task 8B pilot meets that matched-view gate at 0.50 balanced
+The completed Task 8B pilot meets that matched-view gate at 0.50 balanced
 accuracy using 256 px crop-only, uncompressed RGB TIFF views. This does not by
 itself authorize fusion training. The separate seed-train-only device validation
 reaches AUC 0.538 for multi-image fingerprints and 0.543 for the single-image
 proxy, both below the frozen 0.60 minimum. CA is also ineligible because calibrated
 lens/focal/edge-rich coverage is absent. Consequently no PRNU/CA projection or
 fusion weights are trained, RINE remains unchanged, and no physical feature is
-retained.
+retained by the original pilot. The corrected reference-free PRNU-v2 follow-up
+then achieved 78.09% locked alone, while RINE+PRNU-v2 fell to 33.43% after two
+seeds collapsed. PRNU-v2 was therefore also rejected and remains diagnostic.
 
 ### 1.3 Current readiness status
 
-This repository currently contains architecture documents only: no downloaded dataset, frozen manifest, pretrained checkpoint, feature cache, training environment, or measured hardware budget is present. The design is therefore **architecturally trainable but not yet execution-ready**.
+Training, robustness selection, packaging, and the one-time sealed final evaluation are complete. The retained model is controlled RINE seed 42 over frozen CLIP-ViT-L/14-336 layers 6/12/18/24, with fixed-Q96 matching, `T=1`, threshold `0.5`, and every auxiliary feature flag disabled. The sealed `final_test` result is 99.29% (140/141): 100.00% AI-generated accuracy and 98.61% authentic accuracy.
 
-The minimum evidence required before claiming training readiness is:
-
-1. acquire a licensed binary subset and confirm class counts after tampered/mixed/ambiguous rows are removed;
-2. audit native dimensions, formats, source groups, generator metadata, and exact/near duplicates;
-3. materialize the label-independent matched-clean views and independent transform rows;
-4. measure feature eligibility/coverage by label, dataset, and transform before fitting fusion weights;
-5. run a small CLIP embedding-extraction pilot to measure throughput, peak memory, and cache size on the actual machine;
-6. freeze the manifest/splits and only then train Stage A.
-
-The minimum viable training path is Stage A, followed by Stage B and one-at-a-time auxiliary fusion. PRNU, optical features, texture crops, the frequency fast-track, self-training, and CLIP fine-tuning are retention-gated experiments—not dependencies for producing a valid detector.
+The repository contains the pinned seed-42 RINE head and its clean prediction artifact, plus Task 8B evidence. Large datasets, CLIP weights, transformed image banks, and most run artifacts remain external in Colab/Drive by design. The only baseline verification gap is target-hardware resource profiling; SAFE, self-training, selective CLIP fine-tuning, ConvNeXt-Tiny, and external datasets are optional new experiments and may not trigger another read of the sealed `final_test`.
 
 ## 2. Dataset Manifest
 
@@ -264,7 +257,7 @@ Before training the main model, fit a nuisance-only audit on format, dimensions,
 
 ## 7. Model Inputs and Fusion
 
-The mandatory Stage 2 baseline receives global and patch CLIP representations from the same training sample view that will appear as `received_view` at runtime. Experimental fusion additionally receives the following auxiliary features computed from that same view:
+The retained baseline receives only the global controlled-RINE representation computed from the runtime `received_view`. The candidates below were evaluated as experimental additions from the same view, but none is enabled in the packaged model:
 
 - global frozen CLIP representation;
 - aggregated texture-patch representation;
@@ -276,11 +269,11 @@ The mandatory Stage 2 baseline receives global and patch CLIP representations fr
 
 Each deterministic feature family should pass through its own small normalization/projection block before concatenation. Missing or invalid values are zero-filled only after normalization and paired with an explicit validity mask. The final fusion MLP produces one binary logit.
 
-No auxiliary feature may directly override the logit. C2PA remains the only provenance early exit, and the frequency fast-track remains disabled during initial training.
+No auxiliary feature may directly override the logit. C2PA remains the only provenance early exit, and the frequency fast-track is disabled in the retained configuration.
 
 ## 8. Staged Training Procedure
 
-Train in stages so every added component has a measurable reason to remain.
+The project trained in stages so every added component had a measurable reason to remain. The outcomes below are frozen for the baseline.
 
 ### Stage A — Frozen-CLIP baseline
 
@@ -290,7 +283,7 @@ Train in stages so every added component has a measurable reason to remain.
 4. Train a linear or small MLP binary head with `BCEWithLogitsLoss`.
 5. Select the checkpoint by `selection_score`, with R.Acc./F.Acc. regression checks.
 
-This is the minimum baseline every later stage must beat.
+Outcome: Stage A reached a 94.71% three-seed mean locked score and remained the mandatory comparator.
 
 ### Stage B — RINE-style multi-layer features
 
@@ -299,7 +292,7 @@ This is the minimum baseline every later stage must beat.
 3. Train the importance estimator and binary head.
 4. Compare against Stage A on the same manifest and seeds.
 
-Retain the multi-layer extractor only if it adds locked selection value without unacceptable class-specific regression.
+Outcome: controlled RINE reached 100.00% clean, 99.62% robustness, and 99.81% mean locked accuracy and was retained. Seed 42, the strongest retained seed at 99.85% locked, became the packaged checkpoint.
 
 ### Stage C — Deterministic auxiliary families
 
@@ -325,7 +318,7 @@ For each addition, train only the feature projection and fusion head while CLIP 
 - correlation with already retained auxiliary features;
 - latency and memory impact.
 
-Remove features that are redundant, unstable, or useful only on one known generator.
+Outcome: frequency, Lab, and PRNU-v2 fusion were rejected; RGB/phase variants were dropped earlier; optics never became eligible. No Stage C feature is enabled.
 
 ### Stage D — Texture-aware local-detail head
 
@@ -335,11 +328,11 @@ Remove features that are redundant, unstable, or useful only on one known genera
 4. encode selected patches with the shared frozen backbone or the approved small shared patch head;
 5. train soft attention/aggregation and the fusion head.
 
-Tune patch size, patch count, energy-map scale, and aggregation method only on `selection_val`. Keep a fixed inference budget. Texture energy chooses where to look; it is never an authenticity threshold.
+The clean pilot used four non-overlapping 112 px source patches plus one global view and passed its clean gate. Its frozen-checkpoint JPEG/blur/resize continuation then scored 93.13% mean robustness versus 99.80% for controlled RINE, with severe `resize_scale_0.25` failure. Texture was rejected and is disabled.
 
 ### Stage E — Selective backbone fine-tuning
 
-Fine-tuning is optional and begins only after the frozen pipeline is stable.
+Fine-tuning remains optional and was not used for the frozen baseline.
 
 Try candidates in this order:
 
@@ -384,10 +377,10 @@ Evaluate at a fixed interval using `selection_val`:
 4. R.Acc. and F.Acc. for clean and each transform;
 5. per-generator/decoder results;
 6. feature validity/coverage;
-7. ECE for monitoring only until final calibration;
+7. ECE for monitoring; final temperature fitting is attempted only after checkpoint selection;
 8. latency and peak memory.
 
-Save:
+Save the artifacts supported by each trainer. Controlled RINE and auxiliary fusion preserve `latest.pt` and `best_50_50.pt`; Stage A additionally records best-clean and best-robustness checkpoints:
 
 - latest checkpoint;
 - best `selection_score` checkpoint;
@@ -407,7 +400,7 @@ Define numeric regression tolerances before inspecting candidate results.
 
 ## 11. Calibration and Decision Threshold
 
-After selecting the final architecture and checkpoint:
+The planned procedure after selecting the final architecture and checkpoint was:
 
 1. freeze all weights;
 2. fit one temperature parameter on the **clean `selection_val` logits only**;
@@ -415,7 +408,7 @@ After selecting the final architecture and checkpoint:
 4. report clean and per-transform ECE;
 5. use one fixed binary threshold—default `0.5` unless the challenge specifies otherwise.
 
-Do not fit a separate temperature or threshold per transform. That would use knowledge unavailable at inference and hide distribution shift.
+The fit on 165 perfectly classified clean seed-42 rows converged to the lower search bound (`T=0.0500038`). Because this only sharpened already error-free logits and did not provide a meaningful interior calibration solution, it was rejected. Final evaluation and inference use unchanged raw logits with `T=1` and threshold `0.5`. No per-transform temperature or threshold is allowed.
 
 ## 12. Stage 1 Frequency Fast-Track Enablement
 
@@ -435,11 +428,11 @@ Use confidence intervals, not only point estimates. If any required stratum lack
 
 ## 13. Binary Self-Training and Fine-Tuning Loop
 
-Self-training starts only after the supervised pipeline and locked evaluation protocol are stable.
+Self-training was not used for the frozen baseline. If attempted later, it starts only after the supervised pipeline and locked evaluation protocol are stable and remains a separately versioned experiment.
 
 For each iteration:
 
-1. run the current calibrated model on the `self_train_pool`;
+1. run the current frozen model on the `self_train_pool`;
 2. apply separate conservative confidence thresholds for predicted `authentic` and `ai_generated`;
 3. reject low-confidence samples and any sample with uncertain provenance;
 4. audit hidden-label pseudo-label accuracy without exposing labels to training selection;
@@ -456,28 +449,11 @@ Human-reviewed examples may become verified training data only when their binary
 
 ## 14. Final Evaluation
 
-Once architecture, weights, calibration, and threshold are frozen:
+The final architecture, weights, `T=1` decision, threshold, and feature flags were frozen before evaluation. `final_test` was read exactly once through `notebooks/11_final_test.ipynb` on 2026-08-31. It contained 141 direct fixed-Q96 matched-clean rows; it did not contain or authorize a second bank of transformed final-test variants.
 
-1. run `final_test` exactly once for the final internal report;
-2. evaluate the clean set;
-3. evaluate every transform-and-parameter set independently from its clean parent;
-4. compute:
+The final report therefore contains overall and per-class accuracy, false-positive and false-negative rates, confusion matrix, and ECE for those 141 rows. The 14-cell robustness mean and locked 50/50 score remain development `selection_val` evidence from Notebook 07 and must not be presented as measurements on the sealed final-test population. Target-hardware latency, peak memory, and disk/cache profiling remain outstanding.
 
-`final_score = 0.50 × clean_accuracy + 0.50 × mean_independent_transform_accuracy`
-
-Report:
-
-- clean accuracy, R.Acc., F.Acc., confusion matrix, and ECE;
-- one row for every independent transform parameter;
-- robustness mean and final 50/50 score;
-- generator/decoder-family breakdown;
-- auxiliary ablations;
-- feature validity/coverage;
-- false positives and false negatives;
-- inference latency, peak memory, and model size;
-- whether the Stage 1 fast-track remained disabled or passed its gate.
-
-Never select a different checkpoint after viewing final-test results. Any later change starts a new documented experiment with a newly protected final evaluation protocol.
+Recorded result: 141 samples, 99.29% overall accuracy (140/141), 100.00% AI-generated accuracy (69/69), 98.61% authentic accuracy (71/72), and ECE 0.0189. The checkpoint is controlled RINE seed 42 with threshold `0.5` and `T=1`. Never select a different checkpoint or rerun this `final_test` after viewing the result; later experiments require a new protected evaluation protocol.
 
 ## 15. Reproducibility Artifacts
 
@@ -514,29 +490,23 @@ artifacts/
 
 Generated artifacts, downloaded datasets, and checkpoints should not be committed unless the repository explicitly defines a small, licensed fixture policy.
 
-## 16. Training Completion Checklist
+## 16. Completion record
 
-- [ ] Binary provenance screening is complete.
-- [ ] Duplicate and source-group leakage checks pass.
-- [ ] Split and manifest hashes are frozen.
-- [ ] Original bytes and metadata are immutable and C2PA is checked before derivation.
-- [ ] Matched-encoding quality, codec, encoder, and subsampling distributions are label-independent.
-- [ ] Every transformed sample has one canonical matched clean parent and one transform cell.
-- [ ] Resize-0.5x and resize-0.25x use pinned bilinear, antialias, rounding, color, dtype, and library settings.
-- [ ] Every resize output matches its parent dimensions and is cached losslessly or kept as an array.
-- [ ] Compression-nuisance predictiveness is audited before and after matching.
-- [ ] Clean/transformed and label sampling are balanced as designed.
-- [ ] Original/unmatched, matched-view, and same-received-view fusion ablations are reproducible.
-- [ ] Global-only, local-only, and global-plus-local resize ablations are reproducible.
-- [ ] Authentic false-positive and synthetic false-negative changes are reported for both resize rows.
-- [ ] Frozen-CLIP baseline is reproducible.
-- [ ] Every auxiliary family has an individual ablation.
-- [ ] Generator/decoder-family holdouts are reported.
-- [ ] Texture and forensic feature validity/coverage are reported.
-- [ ] Selective fine-tuning beats or justifiably replaces the frozen baseline.
-- [ ] Temperature is fitted once on clean selection validation.
-- [ ] R.Acc./F.Acc. regression gates pass.
-- [ ] Stage 1 fast-track is either explicitly disabled or has passed its enablement gate.
-- [ ] Stage 1 fast-track is disabled unless its precision gate passes on resized authentic images.
-- [ ] Final-test evaluation occurs only after the pipeline is frozen.
-- [ ] The final 50/50 score and error analysis are reproducible from saved artifacts.
+- [x] Binary provenance, corruption, duplicate, and source-group leakage checks completed.
+- [x] Split assignments and manifest hashes were frozen before model selection.
+- [x] Matched encoding was label-independent and all 14 robustness cells derived directly from clean parents without chaining.
+- [x] Resize settings and lossless output behavior were pinned and verified.
+- [x] Nuisance predictiveness was audited before and after matching.
+- [x] Controlled clean/transformed and label sampling was verified.
+- [x] Frozen CLIP, clean-trained RINE, and controlled RINE were evaluated across seeds 42/43/44.
+- [x] Frequency, color, PRNU-v2, and texture candidates received individual evidence-gated decisions; none was retained.
+- [x] Texture global-only, local-only, and global-plus-local resize behavior and per-label errors were reported.
+- [x] Physical-feature eligibility and validity were reported; optical candidates failed closed before binary fitting.
+- [x] R.Acc./F.Acc. gates were applied to retained-model decisions.
+- [x] The frequency fast-track remained disabled.
+- [x] Temperature fitting was attempted once on clean `selection_val` and rejected; `T=1` was frozen.
+- [x] The sealed `final_test` was evaluated exactly once after the pipeline was frozen.
+- [x] The selected checkpoint, calibration decision, final report, and inference contract are reproducible from recorded artifacts.
+- [ ] Run the implemented resource profiler on the target hardware and record model size, latency, peak memory, and disk/cache requirements.
+
+SAFE, self-training, selective fine-tuning, ConvNeXt-Tiny, and external datasets are optional new experiments, not incomplete baseline requirements.

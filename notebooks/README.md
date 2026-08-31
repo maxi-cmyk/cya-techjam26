@@ -76,11 +76,12 @@ specified Task 3 robustness continuation — it does not retain Task 9 by itself
 A verified Colab run reached 100% `global_local` clean selection accuracy for
 all three seeds versus a 99.394% `global_only` mean, corrected one global error
 per seed, introduced none, and emitted `continue_to_robustness_design`. This
-clean result does not retain Task 9 by itself, and `final_test` remains unread.
+clean result did not retain Task 9 by itself, and `final_test` remained unread at
+this stage.
 
 `10_texture_robustness_stage1.ipynb` implements the frozen-checkpoint Stage-1
-robustness continuation specified in
-[`docs/superpowers/specs/2026-08-31-task-9-texture-robustness-stage1-design.md`](../docs/superpowers/specs/2026-08-31-task-9-texture-robustness-stage1-design.md).
+robustness continuation recorded under
+[Task 9 in the project history](../docs/planning/nextSteps.md).
 It is a thin launcher only: every cell calls `scripts/materialize_texture_robustness.py`,
 `scripts/evaluate_texture_robustness.py`, or `scripts/compare_texture_robustness.py`
 (the same `task9-robustness-*` Make targets); no transform, model, inference,

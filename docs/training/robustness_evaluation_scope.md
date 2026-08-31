@@ -1,11 +1,12 @@
-# Robustness Evaluation and Retraining Scope
+# Completed robustness evaluation and retraining scope
 
 ## 1. Purpose
 
-Tasks 1-8 are complete. The next milestone is to measure and improve robustness
-before Task 9 model integration and Task 10 packaging.
+This document is the frozen contract used by Notebook 07 after Tasks 1-8. The
+milestone is complete; it selected the pre-Task-9 parent before the later Task 9
+and Task 10 work.
 
-This run answers three questions:
+The run answered three questions:
 
 1. How well do the existing clean-trained CLIP and RINE checkpoints survive each
    independent Task 3 transformation?
@@ -14,7 +15,8 @@ This run answers three questions:
 3. Do the retained frequency magnitude/residual and Lab candidates add value to
    RINE under the same robustness protocol?
 
-The competition `final_test` remains sealed throughout this milestone.
+The competition `final_test` remained sealed throughout this milestone. It was
+read later, exactly once, by the separately gated Task 10 final evaluation.
 
 ## 2. Fixed Evaluation Contract
 
@@ -37,7 +39,7 @@ The competition `final_test` remains sealed throughout this milestone.
 
 ## 3. Inputs and Preconditions
 
-The run consumes the completed outputs of Tasks 1-8:
+The run consumed the completed outputs of Tasks 1-8:
 
 - the frozen fixed-Q96 matched-clean manifest and source-group splits;
 - Task 3 deterministic transform configuration and provenance fields;
@@ -47,7 +49,7 @@ The run consumes the completed outputs of Tasks 1-8:
 - retained Lab features from Task 8; and
 - seeds `42`, `43`, and `44`.
 
-Before GPU work starts:
+Before GPU work started, the launcher was required to:
 
 1. Run the repository smoke check in the Colab runtime.
 2. Verify the fixed-Q96 manifest hash and split counts.
@@ -89,8 +91,8 @@ Score the current clean-trained checkpoints without updating weights:
 | Frozen CLIP Stage A | None | Mandatory clean and robustness baseline |
 | Existing RINE Stage B | None | Measure whether the clean improvement survives redistribution |
 
-This phase establishes the pre-retraining baseline and must finish before any
-controlled-training result is used for comparison.
+Recorded outcome: frozen CLIP reached a 94.71% mean locked score and the earlier
+clean-trained RINE checkpoints reached 96.20%.
 
 ### Phase B - Controlled RINE retraining
 
@@ -104,7 +106,8 @@ For every epoch, the Task 3 sampler must:
 3. sample transformed draws uniformly across the declared transform cells; and
 4. apply no undocumented augmentation after the selected view.
 
-Compare controlled RINE against existing clean-trained RINE and frozen CLIP.
+Recorded outcome: controlled RINE reached 100.00% clean accuracy, 99.62% mean
+robustness accuracy, and a 99.81% mean locked score across seeds 42/43/44.
 
 ### Phase C - Incremental auxiliary fusion
 
@@ -126,6 +129,11 @@ RGB+Lab concatenation, chromatic aberration, radial distortion, or a full CLIP
 fine-tune. Task 8B remains a separate closed physical-signal track and contributes
 no feature to this robustness matrix.
 
+Recorded outcome: RINE+frequency scored 52.15% mean locked and RINE+Lab scored
+98.95% versus the 99.81% controlled-RINE parent. Both were rejected; because
+neither individual candidate passed, the combined candidate was correctly
+skipped.
+
 ### Phase D - Select the pre-Task-9 model
 
 Aggregate the three seeds only after preserving each seed-level report. Select a
@@ -137,8 +145,9 @@ candidate only when it:
 - preserves balanced label coverage and feature validity; and
 - meets the recorded inference-cost budget for the pre-Task-9 pipeline.
 
-If no auxiliary candidate passes, controlled RINE becomes the input to Task 9.
-Complexity is not retained for a clean-only gain.
+No auxiliary candidate passed, so controlled RINE became the Task 9 parent.
+Seed-level artifacts remained separate, and seed 42 was later selected for
+packaging because its 99.85% locked score was the strongest retained seed.
 
 ## 6. Required Metrics and Reports
 
@@ -174,19 +183,18 @@ Use a new robustness namespace so previous clean milestones are immutable:
 ```text
 artifacts/robustness/
   manifests/
-    selection_transform_manifest.csv
+    dev_clean_manifest.csv
+    transform_manifest.csv
+    combined_manifest.csv
     transform_validation_report.json
-  existing_stage_a/seed_<seed>/
-  existing_rine/seed_<seed>/
-  controlled_rine/seed_<seed>/
+  existing-stage-a/seed_<seed>/
+  existing-rine/seed_<seed>/
+  train-controlled-rine/seed_<seed>/
   rine_frequency/seed_<seed>/
   rine_lab/seed_<seed>/
-  rine_frequency_lab/seed_<seed>/
+  rine_prnu_v2/seed_<seed>/
   reports/
-    seed_comparison.csv
-    cell_comparison.csv
-    retention_decisions.json
-    robustness_summary.json
+    <candidate comparison outputs>
 ```
 
 Every run directory must contain resolved configuration, environment metadata,
@@ -221,25 +229,26 @@ Stop and investigate if:
 - a feature-validity mask becomes label-dependent; or
 - results are incomplete for any required seed or transform cell.
 
-## 9. Handoff to Tasks 9 and 10
+## 9. Recorded handoff to Tasks 9 and 10
 
-This milestone is complete when:
+The milestone completed with:
 
 - all required model/seed/cell combinations have validated reports;
 - the clean and robustness metrics are available separately;
 - the locked 50/50 score is calculated from the declared cells;
 - every candidate has an evidence-backed retention decision;
 - one pre-Task-9 checkpoint is frozen; and
-- the competition `final_test` remains unopened.
+- the competition `final_test` still unopened at this handoff.
 
-Task 9 compares the selected global model with global-plus-patch aggregation
-under the same robustness protocol and a fixed latency budget. Notebook 08 has
-completed the reference-free PRNU-v2 readiness and binary usefulness gate;
-fusion was rejected after two of three seeds collapsed and no combined
-texture+PRNU candidate is authorized. Task 10 begins after Task 9 records its
-retention decision; it owns
-calibration, packaging, the directory inference contract, and the one-time
-sealed final-test execution.
+Task 9 subsequently compared controlled RINE with global-plus-patch aggregation.
+The clean gate passed, but the frozen-checkpoint Stage-1 robustness gate rejected
+texture at 93.13% mean robustness versus 99.80% for controlled RINE. Notebook 08
+also rejected reference-free PRNU-v2 fusion after two of three seeds collapsed.
+
+Task 10 then selected controlled RINE seed 42, rejected the degenerate
+temperature fit in favor of `T=1`, packaged the directory inference contract,
+and performed the one permitted sealed `final_test` run: 99.29% overall
+(140/141), 100.00% AI-generated accuracy, and 98.61% authentic accuracy.
 
 ## 10. Implemented Execution Interface
 
@@ -270,16 +279,16 @@ combined extraction manifest therefore contains no `final_test` rows. The Lab
 target runs the color extractor only, avoiding unnecessary PRNU and optics work.
 
 Local verification covers the contracts, all 14 cells, the controlled sampler,
-JSON-cell reporting, frozen-parent fusion, and a real one-epoch synthetic
-cached-feature run that writes a `best_50_50.pt` checkpoint. Full SID_Set
-materialization, CLIP/RINE extraction, and three-seed metrics require the primary
-fixed-Q96 data and clean checkpoints in the prepared Colab/Drive runtime; those
-artifacts are intentionally not stored in this checkout.
+JSON-cell reporting, frozen-parent fusion, and a one-epoch synthetic
+cached-feature run. The full fixed-Q96 materialization, CLIP/RINE extraction,
+and three-seed matrix were completed in Colab/Drive. Large image and feature
+caches remain external by design; this checkout retains the packaged seed-42
+RINE head and its clean prediction artifact.
 
-## 11. Out of Scope
+## 11. Out of scope for this completed milestone
 
-- Task 9 patch aggregation implementation or training;
-- Task 10 calibration, packaging, and sealed final-test execution;
+- Task 9 patch aggregation implementation or training (completed later);
+- Task 10 calibration, packaging, and sealed final-test execution (completed later);
 - new datasets or changed split assignments;
 - chained or adversarial transformations;
 - mixed-origin or AI-edited classification;

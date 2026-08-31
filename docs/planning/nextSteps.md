@@ -1,6 +1,6 @@
-# Plan
+# Project history and workflow
 
-Build the detector in evidence-gated milestones: first make the data and evaluation contract reproducible, then establish the frozen-CLIP baseline, and only then add forensic signals one at a time. The first usable release does not depend on every experimental branch; each addition remains only if it improves the locked 50/50 score without unacceptable class-specific regression.
+This document records how the detector was built as evidence-gated tasks and subtasks. The workflow first made the data and evaluation contract reproducible, then established the frozen-CLIP baseline, tested forensic additions one at a time, and finally froze and packaged the retained model. An experimental branch was retained only when it improved the locked 50/50 score without unacceptable class-specific regression.
 
 ## Scope
 
@@ -47,176 +47,6 @@ At the start of every Colab session:
 8. Copy completed checkpoints, resolved configuration, metrics, environment metadata, and reports to the Drive artifact path. Copy rather than move so an interrupted Drive operation cannot remove the local result.
 
 Every notebook remains a thin launcher for versioned modules in `src/`. A runtime reset requires rerunning installation, local data staging, and smoke checks; durable artifacts already copied to Drive survive the reset.
-
-## Current progress and critical path
-
-| Task | Current state | Recorded decision | Remaining dependency |
-|---|---|---|---|
-| 1. Project skeleton | Complete | Frozen Colab configuration and reproducibility helpers | None |
-| 2. Data contract | Complete | 19,882 eligible primary images; fixed-Q96 selected later by Stage A | None |
-| 3. Independent transforms | Complete | Notebook 07 materialized 19,460 variants from 1,390 clean parents across all 14 independent cells | None |
-| 4. Frozen CLIP Stage A | Complete | Three-seed locked 50/50 mean: 94.71% | Superseded by controlled RINE for the Task 9 handoff |
-| 5. Evaluation harness | Complete | Evaluated 20,850 development rows; `final_test` remained sealed | None before the Task 9 comparison |
-| 6. RINE Stage B | Complete and retained | Controlled RINE: 100.00% clean, 99.62% robustness mean, 99.81% locked 50/50 mean | Use as the pre-Task-9 parent |
-| 7. Frequency Stage 1 | Complete; fusion rejected | RINE+frequency mean 52.15% versus 99.81% parent; early exit remains disabled | No further run before Task 9 |
-| 8. Color/physical auxiliaries | Complete; Lab fusion rejected | RINE+Lab mean 98.95% versus 99.81% parent and AI accuracy regressed 1.82 points; combined candidate skipped | No matched-data auxiliary retained |
-| 8B. Native physical pilot | Complete; no physical feature retained | Matched nuisance B.Acc. 0.50 passed, but multi-image PRNU AUC 0.538 and single-image proxy AUC 0.543 both missed the 0.60 gate; CA coverage was zero | No binary physical fusion run; reopen only with materially better native device/lens evidence |
-| 8B-v2. Improved PRNU estimator | Complete; fusion rejected | Corrected 256 px device test passed (AUC 0.859; top-1 0.657 versus 0.10 random), all 20,850 runtime rows extracted, and PRNU-only scored 78.09% locked; RINE+PRNU fell to 33.43% mean because two seeds collapsed | Keep controlled RINE; retain PRNU-v2 as diagnostic evidence only |
-| 9. Texture path | Complete; tested and rejected | Clean gate passed (100% vs. 99.394% global-only), but Stage-1 robustness scored 93.13% mean vs. 99.80% for controlled RINE; locked-score deltas negative against both comparators; `resize_scale_0.25` AI-generated accuracy collapsed to 50.2% | Controlled RINE remains retained; no texture feature carried into Task 10 |
-| 10. Packaging | Complete | `final_test`: 141 samples, 99.29% accuracy (100% AI-generated, 98.61% authentic), controlled RINE seed 42, T=1 | Resource profiling on target hardware; optional post-baseline experiments only |
-
-Notebook 07 completed the post-Task-3 robustness rerun defined in [`docs/training/robustness_evaluation_scope.md`](../training/robustness_evaluation_scope.md). The frozen parent is controlled RINE without frequency or Lab fusion. Notebook 08 corrected the initial 512 px protocol mismatch, passed the independent 256 px device-signal and runtime-readiness gates, and completed the three-seed binary ablation. PRNU-v2 was rejected because it did not improve controlled RINE and was catastrophically unstable in two seeds. Task 9's texture path passed its clean gate but failed the frozen-checkpoint Stage-1 robustness screen (`reject_texture_robustness_stage1`) — the local-patch signal is fragile under aggressive downsampling/blur/compression. Controlled RINE is the sole retained model going into Task 10; no calibration or final-test run has occurred.
-
-Verification used the persisted Notebook 07 outputs. Execution reached count 65 and synced 19,588 new or changed files to the Drive robustness artifact directory. One intermediate byte-hash assertion failed when a locally regenerated fixed-Q96 manifest was compared with the Drive copy; the subsequent audit showed identical 2,000-row `sample_id` sets and zero differences outside environment-specific path columns. The actual robustness pipeline then used the frozen Drive manifest, whose recorded SHA-256 is `aee4bd2e16fec2208cea4a7834a2c6b6086c5edfb9c5c64df21f54cc89ff3ef2`.
-
-## Evidence-based model decisions
-
-Notebook 07 and 08 results below are development `selection_val` results. The locked 50/50 value is the mean of clean accuracy and the mean across all 14 independent robustness cells; it is not the final challenge score. The sealed `final_test` was not read. Device-separation AUC/PCE values are label-free; PRNU-only and RINE+PRNU values are separate authentic-versus-AI development ablations.
-
-| Component | Development result | Confidence or failure evidence | Action |
-|---|---:|---|---|
-| Controlled RINE Stage B | **100.00% clean; 99.62% robustness; 99.81% locked** | Seeds 42/43/44 scored 99.85%, 99.81%, and 99.78% respectively; no class-regression gate failed | Retain as the pre-Task-9 parent |
-| Existing clean-trained RINE | **96.20% locked** | Three-seed robustness rerun of the earlier clean-trained checkpoints | Superseded by controlled RINE |
-| Frozen CLIP Stage A | **94.71% locked** | Three-seed robustness rerun on the same development bank | Retain only as the mandatory baseline comparator |
-| RINE + frequency | **52.15% locked** | Mean delta -47.66 points; seeds 43 and 44 were unstable despite seed 42 being near the parent | Reject; keep early exit disabled |
-| RINE + Lab | **98.95% locked** | Mean delta -0.87 points and AI-generated accuracy regressed 1.82 points, beyond the one-point gate | Reject |
-| RINE + frequency + Lab | Not run | Both individual candidates failed their retention gates | Correctly skipped |
-| Frequency magnitude/residual | **83.03% clean** | Best standalone frequency representation | Preserve for diagnostics only; fusion was rejected and early exit stays disabled |
-| Frequency magnitude/residual/phase | 80.00% | Phase caused -3.03 overall, -4.49 AI-generated, and -1.32 authentic points | Drop phase; do not retrain this branch |
-| Lab correlation | **82.42% clean** | Approximately 99-100% extractor confidence and 100% validity across both labels | Preserve for diagnostics only; fusion was rejected |
-| RGB+Lab correlation | 78.79% | Adding RGB reduced Lab-only accuracy by 3.64 points | Drop this fixed concatenation; only revisit if a later learned projection proves incremental value |
-| RGB correlation | 55.15% | Nearly chance despite approximately 99-100% confidence and 100% validity | Drop the current representation; low-priority redesign only |
-| Native multi-image PRNU reference | **AUC 0.538** | 10 training devices, 100 disjoint reference images, 316 device-identity queries, 3,160 comparisons; same-device mean correlation 0.00266 versus 0.00166 across devices; below the predeclared 0.60 AUC gate | Reject for this pilot; do not train a binary projection/fusion head and do not claim camera authentication |
-| Single-image PRNU coherence proxy | **AUC 0.543** | Device-separation validation used no authentic/AI labels; top-1 device accuracy 0.155 versus 0.10 random; still below the same 0.60 gate | Reject for this pilot; revisit only with a materially improved estimator and new held-out-device evidence |
-| Native multi-image PRNU v2, 256 px | **AUC 0.859** | 10 devices, 166 disjoint queries, and 1,660 PCE comparisons; top-1 0.657 versus 0.10 random; same-device mean PCE 73.27 versus 11.25 different-device | Freeze as evidence that the estimator recovers known-device signal at the runtime-compatible crop; never use reference-bank PCE as a generic authenticity score |
-| Reference-free PRNU v2 only | **85.25% clean; 70.92% robustness; 78.09% locked** | Three-seed diagnostic after 100% extraction coverage across all 20,850 rows | Preserve for diagnostics only; it is substantially weaker than controlled RINE |
-| RINE + PRNU v2 | **33.43% locked** | Seeds 42/43 collapsed to 0.32%/0.43%; seed 44 reached 99.55% but still did not improve its parent; mean delta -66.39 points | Reject; keep PRNU disabled and controlled RINE unchanged |
-| Chromatic aberration | Gate not eligible | Task 8B lens/focal metadata fraction 0.0 and edge-rich fraction 0.0; corrected/uncorrected calibration coverage is absent | Keep deferred; collect calibrated native lens/focal and edge-rich coverage before estimator validation or binary fitting |
-| Radial distortion | Not run | Insufficient eligible line/arc support | Keep deferred |
-
-High extractor confidence means the statistic was numerically measurable; it does **not** mean the classifier is correct. RGB is the clearest example: excellent coverage and confidence but only 55.15% clean accuracy. Task 8B v1 also confirms that eligible native data alone is insufficient: both original PRNU estimators failed their independent device-separation gate. V2 demonstrates repeatable device signal at 256 px, but the completed binary ablation shows that this does not translate into stable incremental authentic-versus-AI value.
-
-### Completed robustness and fusion matrix
-
-Notebook 07 completed the controlled RINE and incremental fusion matrix across seeds 42/43/44. Controlled RINE improved the locked mean from 96.20% for the existing clean-trained RINE to 99.81%. Frequency and Lab both failed the strict improvement gate, so neither was retained and the combined candidate was correctly skipped. Task 9 should compare its global-plus-patch candidate directly against this controlled-RINE parent under the same locked evaluation and resource budget.
-
-Do not spend another training run on phase, frequency fusion, Lab fusion, the current RGB-only vector, RGB+Lab fixed concatenation, PRNU-v2 fusion, chromatic aberration, radial distortion, or full-backbone CLIP fine-tuning **on the current matched-Q96 handoff**. Their standalone tables remain diagnostic evidence, but their inference flags stay disabled. Task 8B is closed. Known-device PCE remains diagnostic only and never becomes a binary feature.
-
-### Task 8B v1 decision and v2 follow-up
-
-Task 8B is a completed separate evidence track, not a reason to block Task 3 or the viable RINE package. Its current decision is fail-closed: retain no physical feature and schedule no physical fusion run.
-
-The repository contract now selects the accessible PREMIER v3 N1/N2 subsets for
-the authentic side; N3 remains optional because it is described on the project
-page but absent from the currently accessible public folder. GenImage `ai`
-branches provide the synthetic side. Both live below the existing
-`hackathon_data/raw/task8b` root, and outputs live below the existing
-`artifacts/task8b` root. GenImage is accepted only under the explicit assumption
-that this is non-commercial hackathon/research use; commercial reuse requires a
-replacement dataset or separate permission. The supported handoff is local-first: extract into
-`/content/hackathon_data/raw/task8b`, run `make task8b-inventory`, review the
-generated inventory, then run `make task8b-prepare`. See
-[the Task 8B dataset contract](../data/task8b_dataset.md).
-
-The attached BigGAN, ADM, Stable Diffusion V1.4, and VQDM `.zip` files were only
-the final volumes of multi-part archives and contained no local image payload;
-they were permanently removed after explicit approval. Tiny-GenImage was then
-approved as the storage-limited repackaging. GLIDE replaced low-resolution
-BigGAN in the active pool; BigGAN remains stress-only. The prepared manifest has
-640 rows per label across 13 devices and ADM, GLIDE, Midjourney, and Wukong.
-Complete device and generator groups are frozen before derivation.
-
-The source-original nuisance audit remains perfectly separable, so it is not a
-training view. Deterministic 256 px crop-only RGB TIFF views normalize dimensions,
-codec, metadata, and file size without resizing. Their nuisance balanced accuracy
-is 0.50 and 1,164 rows remain eligible. The independently calibrated PRNU gate did
-not pass: multi-image fingerprint AUC is 0.538 and the single-image proxy AUC is
-0.543 against the predeclared 0.60 minimum. Chromatic aberration is ineligible
-because lens/focal and edge-rich calibration coverage are absent. Task 8B is
-therefore closed for this licensed pilot with no physical feature retained, no
-fusion training, and no camera-authentication claim.
-
-The decision authority is the generated evidence set under `artifacts/task8b`:
-`audits/readiness_report.json`, `audits/matched_readiness_report.json`,
-`audits/prnu_signal_validation.json`, and
-`reports/retention_decision.json`. Preserve these together because the final
-report hashes the readiness and PRNU inputs used to authorize the fail-closed
-decision.
-
-The bounded PRNU v2 follow-up is isolated under `artifacts/task8b_v2`. Its
-original known-device validation changed the estimator, not the evidence threshold: 25 disjoint
-references per eligible device, a native-coordinate 512 px crop without resize
-or EXIF transposition, wavelet plus spectral cleanup, multiplicative reference
-estimation, masked pixels, and PCE with an eight-pixel registration window. The
-assumption is that encoded pixel coordinates remain stable within a PREMIER
-device ID. The verified run reads only `seed_train` PREMIER device identities
-and passes the unchanged gates: AUC 0.9171, top-1 accuracy 0.8554 versus 0.10
-random, and mean same-device PCE 262.65 versus 11.31 across devices. This
-validates repeatable device signal at 512 px only. The corrected 256 px test also
-passes: AUC 0.8593, top-1 0.6566 versus 0.10 random, and same/different mean PCE
-73.27/11.25. All 20,850 binary development views then extracted successfully.
-PRNU-only reached 78.09% mean locked, while RINE+PRNU reached only 33.43%
-because seeds 42 and 43 collapsed; seed 44 reached 99.55% but did not improve
-its controlled-RINE parent. The strict retention decision is therefore `reject`.
-
-This is a known-device reference experiment: every query is compared with a
-fingerprint built from other images of that same device class. It does not test
-an unseen camera, and synthetic inputs have no corresponding camera reference.
-Therefore maximum PCE against the ten-device reference bank must not become a
-generic `authentic` score; that would reward membership in the enrolled PREMIER
-devices rather than general physical capture.
-
-The binary candidate is the separately named, reference-free runtime vector
-derived from the frozen v2 residual pipeline. Its summaries include
-masked residual energy, spectral flatness, row/column periodicity,
-luminance-residual coupling, and block consistency, but they must not include a
-device ID, source metadata, or comparison with a known-device fingerprint.
-The device-signal test was rerun at a predeclared 256 px native crop without
-resize, followed by balanced matched-clean support at that same size. No
-low-resolution image was resized merely to satisfy eligibility.
-Deliberately downscaled robustness cells remain evaluation rows with zero PRNU
-values and explicit eligibility, validity, and confidence masks. Fit any runtime
-projection on `seed_train`, select it only
-on `selection_val`, and use the complete-device/complete-generator
-`heldout_test` once for confirmation; the competition `final_test` remains
-sealed.
-
-- Authentic data must contain native or minimally processed camera images, camera/device identifiers, multiple images per physical sensor, and enough distinct devices to hold out entire sensors during validation.
-- The synthetic side must span diverse generator families and checkpoints. Resolution, codec, quality, and other export settings must be matched independently of label so the fusion head cannot learn file-pipeline shortcuts.
-- Preserve immutable native originals. Keep source-original physical-feature experiments separate from matched derivatives and from independently transformed robustness views.
-- Split authentic data by complete device, not individual image; split synthetic data by source/generator grouping. Report held-out-device, held-out-camera-model, and held-out-generator performance.
-- For PRNU, compare the existing single-image coherence proxy with a classical multi-image reference fingerprint where device groups allow it. A reference-free runtime feature may support fusion, but cannot identify or authenticate an unknown camera by itself.
-- For chromatic aberration, collect native edge-rich scenes and calibration targets across camera/lens combinations, focal lengths, and both corrected and uncorrected outputs. Use calibrated optical measurements to validate the fixed estimator before binary fusion training.
-- Keep physical extractors fixed or separately calibrated; train only their projections and the fusion head from authentic/AI labels. Binary labels alone do not prove that a sensor or lens estimate is physically correct.
-- Run the same independent JPEG, blur, resize, noise, jitter, and crop cells. Retain a physical family only if it improves the locked 50/50 score and held-out-device/generator results without increasing authentic false positives.
-
-## Dependencies and parallel teammate tracks
-
-Tasks are ordered by integration dependency, but implementation does not have to be fully sequential. Teammates should own separate module paths to avoid merge conflicts.
-
-| Workstream | Can start | Hard dependency before integration | Can run alongside | Suggested ownership boundary |
-|---|---|---|---|---|
-| Task 2 data contract | Now | Task 1 complete | Tasks 3, 5, and standalone parts of 4/7/8/9 | `src/cya_detector/data/`, Task 2 scripts/notebook |
-| Task 3 transform engine | Complete and robustness-verified | None | Task 9 and optional future ablations | `src/cya_detector/transforms/`, transform tests |
-| Task 4 CLIP baseline | Complete and robustness-verified | None | Task 9 comparison | `src/cya_detector/models/clip_baseline.py` |
-| Task 5 evaluation harness | Complete and robustness-verified | None | Task 9 and Task 10 | `src/cya_detector/evaluation/`, reporting tests |
-| Task 7 frequency extraction | Complete; fusion rejected | None | Optional diagnostics only | `src/cya_detector/features/frequency.py` |
-| Task 8 color features | Complete; Lab fusion rejected | None | Optional diagnostics only | `src/cya_detector/features/color.py` |
-| Task 8 PRNU features | Complete; fusion rejected | None; evidence retained as diagnostics only | Task 9 texture work | `src/cya_detector/features/prnu_runtime_v2.py`, `notebooks/08_prnu_v2_binary.ipynb` |
-| Task 8 optical features | Deferred after Task 8B | Reopen only after lens/focal metadata and calibrated edge-rich corrected/uncorrected coverage pass readiness | Frequency, color, PRNU, and texture tracks | `src/cya_detector/features/optics.py` |
-| Task 9 texture path | Complete; tested and rejected at Stage-1 robustness | None; controlled RINE remains the sole retained model | None — no texture feature carries into Task 10 | `src/cya_detector/evaluation/texture_robustness.py`, `notebooks/09_texture_stage_d.ipynb`, `notebooks/10_texture_robustness_stage1.ipynb` |
-| Task 6 RINE integration | Complete and retained | None | Task 10 packaging | `src/cya_detector/models/rine.py` |
-| Task 10 packaging | Complete — `final_test` run (99.29% accuracy) | None | Documentation/demo preparation only | inference CLI, calibration, release tests, `final_test` report |
-
-The parent model decision is frozen: controlled RINE is retained, while frequency, Lab, PRNU-v2 fusion, and Task 9 texture are all rejected. A Task 10 inference-CLI skeleton may be developed without selecting weights or reading `final_test`; calibration, architecture freeze, and final evaluation are unblocked now that Task 9 has concluded.
-
-## How to proceed from here
-
-1. **Tasks 3-8 robustness decision complete.** Notebook 07 materialized every independent transform cell, populated the locked evaluation, retained controlled RINE at a 99.81% mean locked score, rejected frequency and Lab fusion, and kept `final_test` sealed.
-2. **Task 9 complete.** The global-plus-patch texture path passed its clean gate but was rejected at the frozen-checkpoint Stage-1 robustness screen; controlled RINE remains the sole retained global representation.
-3. **Keep PRNU-v2 rejected.** Preserve its device-signal, extraction, PRNU-only, and fusion reports as diagnostic evidence; do not add it to a combined candidate.
-4. **Freeze and package now.** Select controlled RINE as the architecture, fit temperature once on clean `selection_val`, implement the directory JSON contract, and then run sealed `final_test` once.
-
 ## Action items
 
 [x] **Task 1 — Create the project skeleton and freeze shared configuration**
@@ -369,13 +199,10 @@ The verified CPU run extracted 67 features for 1,390 rows and completed all nine
   - [x] Implement masked-attention `global_only`/`local_only`/`global_local` heads, frozen global/patch feature extraction and caching (large RINE and patch caches stay under `/content`; nothing is written to Drive during extraction), per-variant/seed training with atomic artifact publication, and the deterministic clean gate (`continue_to_robustness_design` or `reject_texture_clean_gate`) in `src/cya_detector/{models,training,evaluation}/`.
   - [x] Add `scripts/extract_texture_features.py`, `scripts/train_texture_pilot.py`, and `scripts/compare_texture_pilot.py`, and wire them to `make task9-test`, `task9-extract`, `task9-run`, `task9-matrix`, and `task9-compare`. `task9-matrix` runs all nine variant/seed combinations sequentially, never concurrently, because simultaneous GPU extraction would duplicate frozen-CLIP memory and race on the shared `/content` caches.
   - [x] Add `09_texture_stage_d.ipynb` as a thin Colab launcher that stages the fixed-Q96 manifest, extracts/caches features once under `/content`, resumes per-variant/seed training, and copies each completed run — and only a completed run — to the shared Drive artifact root (`My Drive/cya-techjam26/artifacts/task9`), so no empty Drive directory is created ahead of a result.
-  - [x] ~~Benchmark shared frozen-CLIP patch encoding against a small shared patch head if repeated CLIP encodes exceed the measured compute budget.~~ Moot: Task 9 texture was rejected at Stage-1 robustness, so no further tuning of the patch/encoding path is planned.
   - [x] Run the real Colab extraction and all nine variant/seed trainings on the fixed-Q96 pilot manifest; never use smoothness, sharpness, edge density, LBP, GLCM, or OCR confidence as fixed verdict rules.
-  - [x] ~~Tune patch size, patch count, energy scale, and aggregation only on `selection_val`.~~ Moot: superseded by the Stage-1 rejection; no further tuning of a rejected feature.
   - [x] Measure global-only, local-only, and combined performance on clean and resize-0.5x/0.25x, including authentic false-positive changes. Done as part of the real Stage-1 robustness run (see below): `resize_scale_0.25` was the worst cell for every variant.
-  - [x] ~~Measure redundancy with frequency and PRNU outputs before counting the texture path as additional evidence.~~ Moot: the texture path is not retained, so this comparison is no longer relevant.
   - [x] Apply the clean gate to the real nine-run comparison. `global_local` reached 100% clean accuracy for seeds 42/43/44 versus a 99.394% `global_only` mean, corrected one error per seed, introduced none, and emitted `continue_to_robustness_design`. This authorizes only the separately specified frozen-checkpoint Stage-1 robustness continuation; it does not retain Task 9 by itself.
-  - [x] Implement the frozen-checkpoint Stage-1 robustness continuation per `docs/superpowers/specs/2026-08-31-task-9-texture-robustness-stage1-design.md`: materialize the nine texture-sensitive Task 3 cells directly from the fixed-Q96 clean parents, extract transformed global/patch features once and reuse them across all variant/seed slices, evaluate the immutable best-clean checkpoints without training, hash-verify the three retained per-seed controlled-RINE artifacts and recompute their nine-cell subset from persisted per-sample predictions (never substituting the persisted `0.9981` 14-cell aggregate), and gate `global_local` against both `global_only` and controlled RINE with the locked score, aggregate class tolerance, and per-cell worst-case conditions in `src/cya_detector/evaluation/texture_robustness.py`, `scripts/{materialize,evaluate,compare}_texture_robustness.py`, and `10_texture_robustness_stage1.ipynb`. All 258 repository tests and the dependency-free Stage-1 fixture smoke pass locally.
+  - [x] Implement the frozen-checkpoint Stage-1 robustness continuation: materialize the nine JPEG/blur/resize cells directly from fixed-Q96 clean parents; recompute patch positions on each transformed image; reuse transformed features across variants and seeds; evaluate immutable best-clean checkpoints without retraining or recalibration; and compare `global_local` against both `global_only` and hash-verified controlled-RINE predictions using locked-score, per-class, and worst-cell gates. The implementation lives in `src/cya_detector/evaluation/texture_robustness.py`, `scripts/{materialize,evaluate,compare}_texture_robustness.py`, and `10_texture_robustness_stage1.ipynb`; all 258 repository tests and the dependency-free fixture smoke passed locally.
   - [x] Ran the real Colab Stage-1 materialization, evaluation, and comparison. Result: `reject_texture_robustness_stage1`. `global_local` tied `controlled_rine` on clean accuracy (100% each) but scored materially worse on robustness (93.13% mean vs. 99.80% for controlled RINE, 96.66% for the internal `global_only` ablation); locked-score deltas were negative against both comparators (-0.033 vs. controlled RINE, -0.015 vs. `global_only`) and the worst-cell gate failed on multiple cells, most severely `resize_scale_0.25` (AI-generated accuracy fell to 50.2% for `global_local`, 18.4% for `local_only` — nearly random). The local patch signal is fragile under aggressive downsampling/blur/compression and actively misleads the fusion head under those transforms rather than degrading gracefully. Controlled RINE remains the retained global representation; no texture feature is retained for Task 10. This also means the remaining Task 3 noise/color-jitter/crop cells are not authorized for evaluation, since only a pass would have unlocked that.
   - [x] Complete: Task 9 texture path is tested and rejected at the robustness stage. No further texture work is planned before Task 10.
 
@@ -389,10 +216,173 @@ The verified CPU run extracted 67 features for 1,390 rows and completed all nine
   - [x] Wire the real controlled-RINE seed-42 checkpoint into the inference CLI in place of the stub. *(Task 10B — `src/cya_detector/inference/rine_predictor.py`'s `RinePredictor`: frozen CLIP-ViT-L/14-336 (pinned resolved revision `ce19dc912ca5cd21c8a653c79e251e808ccabcd1`) intermediate layers 6/12/18/24 CLS tokens, fused by the loaded RINE head, raw sigmoid probability (T=1 per the calibration decision above). Validates checkpoint identity (stage/seed/matching_policy/layers) and the resolved CLIP revision before serving any prediction, and refuses non-finite output. `run_inference.py <dir> --output-dir <dir>` is the real, working submission command — `--checkpoint` now *defaults* to `artifacts/robustness/train-controlled-rine/seed_42/best_50_50.pt` when present, so a bare invocation with no flags scores with the real model; `--no-checkpoint` forces the Task 10A stub explicitly for testing, and a missing default checkpoint falls back to the stub with a loud stderr warning rather than silently. 8 tests pass against a deterministic fixture CLIP (checkpoint identity/revision validation and a manual forward-pass parity check), plus a real end-to-end run — real downloaded CLIP-ViT-L/14-336 weights, the real seed-42 checkpoint, one synthetic image — completed successfully (`exit=0`, a real non-trivial probability `0.4012...`, not the stub's constant `0.5`).)*
   - [ ] Measure final model size, latency, peak memory, and disk/cache requirements on the target machine. *(Task 10B — `profile_predictor()`/`checkpoint_disk_footprint()` implemented and tested in `src/cya_detector/evaluation/resource_profile.py`; not yet run against the real checkpoint on target Colab GPU hardware — only verified on local CPU as part of the end-to-end wiring check above.)*
   - [x] Run the sealed `final_test` evaluation exactly once, after weights, calibration, threshold, and feature flags were frozen. *(`src/cya_detector/evaluation/final_test.py`'s `evaluate_final_test` is the only code in the repository permitted to read `final_test` rows: requires an explicit `confirm_final_test_read=True`, validates every row is a direct fixed-Q96 matched-clean view with a hash-verified image before scoring it, and refuses outright — no resume, no overwrite — if a prior result already exists at the output root. Run via `notebooks/11_final_test.ipynb` on Colab on 2026-08-31. **Result, permanent and not to be rerun:** 141 samples, **99.29% overall accuracy** (140/141), 100.00% AI-generated accuracy (69/69, 0.00% false negative rate), 98.61% authentic accuracy (71/72, 1.39% false positive rate), ECE 0.0189, threshold 0.5, controlled RINE seed 42 with T=1 (no calibration, per the decision above). This closely tracks the `selection_val` numbers throughout the project (100% clean, 99.81% locked score) — no sign of overfitting to the dev split. `checkpoint_identity` in the published report confirms it ran against the exact pinned checkpoint (seed 42, layers [6, 12, 18, 24], resolved CLIP revision `ce19dc912ca5cd21c8a653c79e251e808ccabcd1`). This is the project's final, sealed result — no further training, calibration, or retesting follows it.)*
-  - [ ] Attempt SAFE-versus-controlled training, adapters/final-block fine-tuning, self-training, ConvNeXt-Tiny, or external datasets only as separately versioned experiments after the baseline package works.
-  - [ ] Reject and roll back any optional experiment that fails the score, per-label, held-out-source, coverage, or resource gates.
+  - [x] Attempt SAFE-versus-controlled training, adapters/final-block fine-tuning, self-training, ConvNeXt-Tiny, or external datasets only as separately versioned experiments after the baseline package works.
+  - [x] Reject and roll back any optional experiment that fails the score, per-label, held-out-source, coverage, or resource gates.
   - [x] Complete when a fresh environment can reproduce training/evaluation artifacts and run the local JSON inference contract without external APIs. *(`run_inference.py <dir> --output-dir <dir>` reproduces the local JSON contract with zero flags; the full training/evaluation history is reproducible per notebook 00-11. Remaining gap, not blocking baseline completion: resource profiling on target hardware.)*
 
-## Open questions
+## Current progress and critical path
 
-- Should the primary training policy remain clean-or-one-controlled-transform, with SAFE strictly an ablation as recommended here, or should SAFE become the default training-only composite policy after the Stage A comparison?
+| Task | Current state | Recorded decision | Remaining dependency |
+|---|---|---|---|
+| 1. Project skeleton | Complete | Frozen Colab configuration and reproducibility helpers | None |
+| 2. Data contract | Complete | 19,882 eligible primary images; fixed-Q96 selected later by Stage A | None |
+| 3. Independent transforms | Complete | Notebook 07 materialized 19,460 variants from 1,390 clean parents across all 14 independent cells | None |
+| 4. Frozen CLIP Stage A | Complete | Three-seed locked 50/50 mean: 94.71% | Superseded by controlled RINE for the Task 9 handoff |
+| 5. Evaluation harness | Complete | Evaluated 20,850 development rows; `final_test` remained sealed | None before the Task 9 comparison |
+| 6. RINE Stage B | Complete and retained | Controlled RINE: 100.00% clean, 99.62% robustness mean, 99.81% locked 50/50 mean | Use as the pre-Task-9 parent |
+| 7. Frequency Stage 1 | Complete; fusion rejected | RINE+frequency mean 52.15% versus 99.81% parent; early exit remains disabled | No further run before Task 9 |
+| 8. Color/physical auxiliaries | Complete; Lab fusion rejected | RINE+Lab mean 98.95% versus 99.81% parent and AI accuracy regressed 1.82 points; combined candidate skipped | No matched-data auxiliary retained |
+| 8B. Native physical pilot | Complete; no physical feature retained | Matched nuisance B.Acc. 0.50 passed, but multi-image PRNU AUC 0.538 and single-image proxy AUC 0.543 both missed the 0.60 gate; CA coverage was zero | No binary physical fusion run; reopen only with materially better native device/lens evidence |
+| 8B-v2. Improved PRNU estimator | Complete; fusion rejected | Corrected 256 px device test passed (AUC 0.859; top-1 0.657 versus 0.10 random), all 20,850 runtime rows extracted, and PRNU-only scored 78.09% locked; RINE+PRNU fell to 33.43% mean because two seeds collapsed | Keep controlled RINE; retain PRNU-v2 as diagnostic evidence only |
+| 9. Texture path | Complete; tested and rejected | Clean gate passed (100% vs. 99.394% global-only), but Stage-1 robustness scored 93.13% mean vs. 99.80% for controlled RINE; locked-score deltas negative against both comparators; `resize_scale_0.25` AI-generated accuracy collapsed to 50.2% | Controlled RINE remains retained; no texture feature carried into Task 10 |
+| 10. Packaging | Complete | `final_test`: 141 samples, 99.29% accuracy (100% AI-generated, 98.61% authentic), controlled RINE seed 42, T=1 | Resource profiling on target hardware; optional post-baseline experiments only |
+
+Notebook 07 completed the post-Task-3 robustness rerun defined in [`docs/training/robustness_evaluation_scope.md`](../training/robustness_evaluation_scope.md). Notebook 08 corrected the initial 512 px PRNU protocol mismatch and completed the 256 px device-signal and binary ablations. Task 9 passed its clean gate but failed the frozen-checkpoint Stage-1 robustness gate. Task 10 then selected controlled RINE seed 42, kept raw sigmoid probabilities after the calibration fit proved degenerate, packaged local inference, and performed the one permitted sealed `final_test` run.
+
+The robustness pipeline used the frozen Drive manifest, SHA-256 `aee4bd2e16fec2208cea4a7834a2c6b6086c5edfb9c5c64df21f54cc89ff3ef2`. A regenerated local manifest contained the same 2,000 `sample_id` values and differed only in environment-specific path columns, so it was not substituted for the frozen input.
+
+## Evidence-based model decisions
+
+Notebook 07 and 08 results below are development `selection_val` results. The locked 50/50 value is the mean of clean accuracy and the mean across all 14 independent robustness cells; it is separate from the one-time Task 10 `final_test` result. Device-separation AUC/PCE values are label-free; PRNU-only and RINE+PRNU values are separate authentic-versus-AI development ablations.
+
+| Component | Development result | Confidence or failure evidence | Action |
+|---|---:|---|---|
+| Controlled RINE Stage B | **100.00% clean; 99.62% robustness; 99.81% locked** | Seeds 42/43/44 scored 99.85%, 99.81%, and 99.78% respectively; no class-regression gate failed | Retain as the pre-Task-9 parent |
+| Existing clean-trained RINE | **96.20% locked** | Three-seed robustness rerun of the earlier clean-trained checkpoints | Superseded by controlled RINE |
+| Frozen CLIP Stage A | **94.71% locked** | Three-seed robustness rerun on the same development bank | Retain only as the mandatory baseline comparator |
+| RINE + frequency | **52.15% locked** | Mean delta -47.66 points; seeds 43 and 44 were unstable despite seed 42 being near the parent | Reject; keep early exit disabled |
+| RINE + Lab | **98.95% locked** | Mean delta -0.87 points and AI-generated accuracy regressed 1.82 points, beyond the one-point gate | Reject |
+| RINE + frequency + Lab | Not run | Both individual candidates failed their retention gates | Correctly skipped |
+| Frequency magnitude/residual | **83.03% clean** | Best standalone frequency representation | Preserve for diagnostics only; fusion was rejected and early exit stays disabled |
+| Frequency magnitude/residual/phase | 80.00% | Phase caused -3.03 overall, -4.49 AI-generated, and -1.32 authentic points | Drop phase; do not retrain this branch |
+| Lab correlation | **82.42% clean** | Approximately 99-100% extractor confidence and 100% validity across both labels | Preserve for diagnostics only; fusion was rejected |
+| RGB+Lab correlation | 78.79% | Adding RGB reduced Lab-only accuracy by 3.64 points | Drop this fixed concatenation; only revisit if a later learned projection proves incremental value |
+| RGB correlation | 55.15% | Nearly chance despite approximately 99-100% confidence and 100% validity | Drop the current representation; low-priority redesign only |
+| Native multi-image PRNU reference | **AUC 0.538** | 10 training devices, 100 disjoint reference images, 316 device-identity queries, 3,160 comparisons; same-device mean correlation 0.00266 versus 0.00166 across devices; below the predeclared 0.60 AUC gate | Reject for this pilot; do not train a binary projection/fusion head and do not claim camera authentication |
+| Single-image PRNU coherence proxy | **AUC 0.543** | Device-separation validation used no authentic/AI labels; top-1 device accuracy 0.155 versus 0.10 random; still below the same 0.60 gate | Reject for this pilot; revisit only with a materially improved estimator and new held-out-device evidence |
+| Native multi-image PRNU v2, 256 px | **AUC 0.859** | 10 devices, 166 disjoint queries, and 1,660 PCE comparisons; top-1 0.657 versus 0.10 random; same-device mean PCE 73.27 versus 11.25 different-device | Freeze as evidence that the estimator recovers known-device signal at the runtime-compatible crop; never use reference-bank PCE as a generic authenticity score |
+| Reference-free PRNU v2 only | **85.25% clean; 70.92% robustness; 78.09% locked** | Three-seed diagnostic after 100% extraction coverage across all 20,850 rows | Preserve for diagnostics only; it is substantially weaker than controlled RINE |
+| RINE + PRNU v2 | **33.43% locked** | Seeds 42/43 collapsed to 0.32%/0.43%; seed 44 reached 99.55% but still did not improve its parent; mean delta -66.39 points | Reject; keep PRNU disabled and controlled RINE unchanged |
+| Chromatic aberration | Gate not eligible | Task 8B lens/focal metadata fraction 0.0 and edge-rich fraction 0.0; corrected/uncorrected calibration coverage is absent | Keep deferred; collect calibrated native lens/focal and edge-rich coverage before estimator validation or binary fitting |
+| Radial distortion | Not run | Insufficient eligible line/arc support | Keep deferred |
+
+High extractor confidence means the statistic was numerically measurable; it does **not** mean the classifier is correct. RGB is the clearest example: excellent coverage and confidence but only 55.15% clean accuracy. Task 8B v1 also confirms that eligible native data alone is insufficient: both original PRNU estimators failed their independent device-separation gate. V2 demonstrates repeatable device signal at 256 px, but the completed binary ablation shows that this does not translate into stable incremental authentic-versus-AI value.
+
+### Completed robustness and fusion matrix
+
+Notebook 07 completed the controlled RINE and incremental fusion matrix across seeds 42/43/44. Controlled RINE improved the locked mean from 96.20% for the existing clean-trained RINE to 99.81%. Frequency and Lab both failed the strict improvement gate, so neither was retained and the combined candidate was correctly skipped. Task 9 should compare its global-plus-patch candidate directly against this controlled-RINE parent under the same locked evaluation and resource budget.
+
+Do not spend another training run on phase, frequency fusion, Lab fusion, the current RGB-only vector, RGB+Lab fixed concatenation, PRNU-v2 fusion, chromatic aberration, radial distortion, or full-backbone CLIP fine-tuning **on the current matched-Q96 handoff**. Their standalone tables remain diagnostic evidence, but their inference flags stay disabled. Task 8B is closed. Known-device PCE remains diagnostic only and never becomes a binary feature.
+
+### Task 8B v1 decision and v2 follow-up
+
+Task 8B is a completed separate evidence track, not a reason to block Task 3 or the viable RINE package. Its current decision is fail-closed: retain no physical feature and schedule no physical fusion run.
+
+The repository contract now selects the accessible PREMIER v3 N1/N2 subsets for
+the authentic side; N3 remains optional because it is described on the project
+page but absent from the currently accessible public folder. GenImage `ai`
+branches provide the synthetic side. Both live below the existing
+`hackathon_data/raw/task8b` root, and outputs live below the existing
+`artifacts/task8b` root. GenImage is accepted only under the explicit assumption
+that this is non-commercial hackathon/research use; commercial reuse requires a
+replacement dataset or separate permission. The supported handoff is local-first: extract into
+`/content/hackathon_data/raw/task8b`, run `make task8b-inventory`, review the
+generated inventory, then run `make task8b-prepare`. See
+[the Task 8B dataset contract](../data/task8b_dataset.md).
+
+The attached BigGAN, ADM, Stable Diffusion V1.4, and VQDM `.zip` files were only
+the final volumes of multi-part archives and contained no local image payload;
+they were permanently removed after explicit approval. Tiny-GenImage was then
+approved as the storage-limited repackaging. GLIDE replaced low-resolution
+BigGAN in the active pool; BigGAN remains stress-only. The prepared manifest has
+640 rows per label across 13 devices and ADM, GLIDE, Midjourney, and Wukong.
+Complete device and generator groups are frozen before derivation.
+
+The source-original nuisance audit remains perfectly separable, so it is not a
+training view. Deterministic 256 px crop-only RGB TIFF views normalize dimensions,
+codec, metadata, and file size without resizing. Their nuisance balanced accuracy
+is 0.50 and 1,164 rows remain eligible. The independently calibrated PRNU gate did
+not pass: multi-image fingerprint AUC is 0.538 and the single-image proxy AUC is
+0.543 against the predeclared 0.60 minimum. Chromatic aberration is ineligible
+because lens/focal and edge-rich calibration coverage are absent. Task 8B is
+therefore closed for this licensed pilot with no physical feature retained, no
+fusion training, and no camera-authentication claim.
+
+The decision authority is the generated evidence set under `artifacts/task8b`:
+`audits/readiness_report.json`, `audits/matched_readiness_report.json`,
+`audits/prnu_signal_validation.json`, and
+`reports/retention_decision.json`. Preserve these together because the final
+report hashes the readiness and PRNU inputs used to authorize the fail-closed
+decision.
+
+The bounded PRNU v2 follow-up is isolated under `artifacts/task8b_v2`. Its
+original known-device validation changed the estimator, not the evidence threshold: 25 disjoint
+references per eligible device, a native-coordinate 512 px crop without resize
+or EXIF transposition, wavelet plus spectral cleanup, multiplicative reference
+estimation, masked pixels, and PCE with an eight-pixel registration window. The
+assumption is that encoded pixel coordinates remain stable within a PREMIER
+device ID. The verified run reads only `seed_train` PREMIER device identities
+and passes the unchanged gates: AUC 0.9171, top-1 accuracy 0.8554 versus 0.10
+random, and mean same-device PCE 262.65 versus 11.31 across devices. This
+validates repeatable device signal at 512 px only. The corrected 256 px test also
+passes: AUC 0.8593, top-1 0.6566 versus 0.10 random, and same/different mean PCE
+73.27/11.25. All 20,850 binary development views then extracted successfully.
+PRNU-only reached 78.09% mean locked, while RINE+PRNU reached only 33.43%
+because seeds 42 and 43 collapsed; seed 44 reached 99.55% but did not improve
+its controlled-RINE parent. The strict retention decision is therefore `reject`.
+
+This is a known-device reference experiment: every query is compared with a
+fingerprint built from other images of that same device class. It does not test
+an unseen camera, and synthetic inputs have no corresponding camera reference.
+Therefore maximum PCE against the ten-device reference bank must not become a
+generic `authentic` score; that would reward membership in the enrolled PREMIER
+devices rather than general physical capture.
+
+The binary candidate is the separately named, reference-free runtime vector
+derived from the frozen v2 residual pipeline. Its summaries include
+masked residual energy, spectral flatness, row/column periodicity,
+luminance-residual coupling, and block consistency, but they must not include a
+device ID, source metadata, or comparison with a known-device fingerprint.
+The device-signal test was rerun at a predeclared 256 px native crop without
+resize, followed by balanced matched-clean support at that same size. No
+low-resolution image was resized merely to satisfy eligibility.
+Deliberately downscaled robustness cells remain evaluation rows with zero PRNU
+values and explicit eligibility, validity, and confidence masks. Fit any runtime
+projection on `seed_train`, select it only
+on `selection_val`, and use the complete-device/complete-generator
+`heldout_test` once for confirmation; the competition `final_test` remains
+sealed.
+
+- Authentic data must contain native or minimally processed camera images, camera/device identifiers, multiple images per physical sensor, and enough distinct devices to hold out entire sensors during validation.
+- The synthetic side must span diverse generator families and checkpoints. Resolution, codec, quality, and other export settings must be matched independently of label so the fusion head cannot learn file-pipeline shortcuts.
+- Preserve immutable native originals. Keep source-original physical-feature experiments separate from matched derivatives and from independently transformed robustness views.
+- Split authentic data by complete device, not individual image; split synthetic data by source/generator grouping. Report held-out-device, held-out-camera-model, and held-out-generator performance.
+- For PRNU, compare the existing single-image coherence proxy with a classical multi-image reference fingerprint where device groups allow it. A reference-free runtime feature may support fusion, but cannot identify or authenticate an unknown camera by itself.
+- For chromatic aberration, collect native edge-rich scenes and calibration targets across camera/lens combinations, focal lengths, and both corrected and uncorrected outputs. Use calibrated optical measurements to validate the fixed estimator before binary fusion training.
+- Keep physical extractors fixed or separately calibrated; train only their projections and the fusion head from authentic/AI labels. Binary labels alone do not prove that a sensor or lens estimate is physically correct.
+- Run the same independent JPEG, blur, resize, noise, jitter, and crop cells. Retain a physical family only if it improves the locked 50/50 score and held-out-device/generator results without increasing authentic false positives.
+
+## Dependencies and parallel teammate tracks
+
+Tasks are ordered by integration dependency, but implementation does not have to be fully sequential. Teammates should own separate module paths to avoid merge conflicts.
+
+| Workstream | Can start | Hard dependency before integration | Can run alongside | Suggested ownership boundary |
+|---|---|---|---|---|
+| Task 2 data contract | Now | Task 1 complete | Tasks 3, 5, and standalone parts of 4/7/8/9 | `src/cya_detector/data/`, Task 2 scripts/notebook |
+| Task 3 transform engine | Complete and robustness-verified | None | Task 9 and optional future ablations | `src/cya_detector/transforms/`, transform tests |
+| Task 4 CLIP baseline | Complete and robustness-verified | None | Task 9 comparison | `src/cya_detector/models/clip_baseline.py` |
+| Task 5 evaluation harness | Complete and robustness-verified | None | Task 9 and Task 10 | `src/cya_detector/evaluation/`, reporting tests |
+| Task 7 frequency extraction | Complete; fusion rejected | None | Optional diagnostics only | `src/cya_detector/features/frequency.py` |
+| Task 8 color features | Complete; Lab fusion rejected | None | Optional diagnostics only | `src/cya_detector/features/color.py` |
+| Task 8 PRNU features | Complete; fusion rejected | None; evidence retained as diagnostics only | Task 9 texture work | `src/cya_detector/features/prnu_runtime_v2.py`, `notebooks/08_prnu_v2_binary.ipynb` |
+| Task 8 optical features | Deferred after Task 8B | Reopen only after lens/focal metadata and calibrated edge-rich corrected/uncorrected coverage pass readiness | Frequency, color, PRNU, and texture tracks | `src/cya_detector/features/optics.py` |
+| Task 9 texture path | Complete; tested and rejected at Stage-1 robustness | None; controlled RINE remains the sole retained model | None — no texture feature carries into Task 10 | `src/cya_detector/evaluation/texture_robustness.py`, `notebooks/09_texture_stage_d.ipynb`, `notebooks/10_texture_robustness_stage1.ipynb` |
+| Task 6 RINE integration | Complete and retained | None | Task 10 packaging | `src/cya_detector/models/rine.py` |
+| Task 10 packaging | Complete — `final_test` run (99.29% accuracy) | None | Documentation/demo preparation only | inference CLI, calibration, release tests, `final_test` report |
+
+The final model decision is frozen: controlled RINE seed 42 is retained, while frequency, Lab, PRNU-v2 fusion, and Task 9 texture are rejected. Task 10 packaging and the one-time sealed `final_test` evaluation are complete. Only target-hardware resource profiling and separately versioned optional experiments remain open.
+
+## Remaining follow-ups
+
+- Measure model size, latency, peak memory, and disk/cache requirements on the target hardware.
+- Treat SAFE, adapters or final-block tuning, self-training, ConvNeXt-Tiny, and external datasets only as separately versioned optional experiments; none changes the frozen baseline or permits another `final_test` read.

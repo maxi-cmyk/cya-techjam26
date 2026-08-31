@@ -1,143 +1,94 @@
-# SAFE — Implementation Guide for Training
+# SAFE training ablation
 
-This is for whoever builds the training loop. SAFE is **not** something applied to the dataset
-files themselves — it's a set of transforms applied live, every epoch, inside your training
-pipeline (via `torchvision.transforms` or equivalent). The dataset handoff (`cleaned/sid_set/`)
-is deliberately untouched by SAFE — you apply this on top of it during training.
+SAFE is an optional, training-only ablation. It is implemented in
+`src/cya_detector/transforms/safe.py`, configured under
+`configs/colab.json["training_policy"]["safe"]`, and disabled in the retained
+pipeline. It must never be applied to stored dataset files, `selection_val`,
+`final_test`, robustness variants, or inference inputs.
 
-Paper: Li et al., "Improving Synthetic Image Detection Towards Generalization: An Image
-Transformation Perspective" (SAFE), KDD '25.
+The design is based on Li et al., ["Improving Synthetic Image Detection Towards
+Generalization: An Image Transformation Perspective"](https://arxiv.org/abs/2408.06741)
+(KDD 2025) and its [official implementation](https://github.com/Ouxiang-Li/SAFE).
+The paper motivates crop-based preprocessing, ColorJitter and RandomRotation,
+and patch-based random masking. The exact settings and deterministic behavior
+below are repository choices.
 
-## Why SAFE exists (one paragraph)
+## Relationship to the primary training policy
 
-Most detectors overfit to whichever generator they were trained on and fail to generalize to
-new generators. SAFE's core finding: this isn't a model-architecture problem, it's a
-**training-pipeline bias** problem — specifically, how images get resized and how little
-augmentation variety they see. Fix those two things with simple, cheap operations, and a
-lightweight classifier generalizes surprisingly well.
+The retained controlled policy draws either a clean view or exactly one Task 3
+transform. SAFE is a separate alternative, not an extra augmentation layer on
+top of that sampler. `validate_training_policy()` requires exactly one of the
+controlled and SAFE policies to be enabled and rejects SAFE outside
+`phase="seed_train"`.
 
-## Two changes to make, both applied only in the training data loader
+The current configuration keeps:
 
-### 1. Replace resize with crop
-
-**Problem:** standard practice resizes images to a fixed size using bilinear downsampling.
-This smooths out the subtle local pixel correlations that up-sampling/convolution operations
-leave behind during image generation — exactly the signal the detector needs to catch.
-
-**Fix:**
-- **Training:** use `RandomCrop`, not `Resize`
-- **Inference/validation:** use `CenterCrop`, not `Resize`
-
-```python
-from torchvision import transforms
-
-# Training transform
-train_transform = transforms.Compose([
-    transforms.RandomCrop(224),   # or whatever input size the classifier head expects
-    transforms.RandomHorizontalFlip(),
-    # ColorJitter, RandomRotation, RandomMask go here — see below
-])
-
-# Validation/inference transform
-val_transform = transforms.Compose([
-    transforms.CenterCrop(224),
-])
+```text
+training_policy.controlled.enabled = true
+training_policy.safe.enabled = false
 ```
 
-Note: our dataset images are already saved at 336×336. Cropping to a smaller size like 224
-(CLIP ViT-B/32's expected input) or 336 (ViT-L/14's) is normal — crop, don't resize, whatever
-the final input size ends up being.
+Enabling SAFE is therefore a new, separately versioned experiment. It cannot
+change the frozen controlled-RINE baseline or authorize another `final_test`
+read.
 
-### 2. Add three augmentations beyond the usual HorizontalFlip
+## Repository implementation
 
-The paper found that HorizontalFlip alone isn't enough augmentation diversity to generalize
-across generator architectures. Add these three, applied together, during training only:
+For each `seed_train` image, `apply_safe()` performs these operations in order:
 
-**ColorJitter**
-```python
-transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5)
-```
-Jitters brightness/contrast/saturation by a random factor sampled from `[max(0, 1-α), 1+α]`.
-The paper doesn't lock α to one exact value in the main text — 0.5 is a reasonable middle-of-range
-starting point; treat it as tunable.
+1. symmetrically zero-pad images smaller than 336 px;
+2. take a deterministic random 336 x 336 crop;
+3. apply horizontal flip with probability 0.5;
+4. sample brightness, contrast, and saturation factors from `[0.5, 1.5]` and
+   apply them in that order;
+5. rotate by a sampled angle in `[-180, 180]` using bilinear interpolation,
+   without canvas expansion, and fill exposed pixels with black;
+6. with probability 0.5, choose a target mask fraction from `[0, 0.75]`, shuffle
+   the non-overlapping 16 x 16 grid cells, and mask as many whole cells as fit
+   without exceeding the target area.
 
-**RandomRotation**
-```python
-transforms.RandomRotation(degrees=180, fill=0)
-```
-Rotates by a random angle in `[-180°, +180°]`, filling the exposed corners with zero-value
-(black) pixels — that's what `fill=0` does. The paper uses the full ±180° range.
+The input size is 336 because the project is pinned to
+`openai/clip-vit-large-patch14-336`; the older 224 px ViT-B examples do not
+describe this repository.
 
-**RandomMask** — this one has no direct `torchvision` equivalent, needs a small custom
-transform:
-```python
-import numpy as np
-import random
+Randomness is reproducible. Crop, flip, jitter, rotation, and mask each receive
+a named local seed derived from the project seed, epoch, sample ID, and operation
+name with SHA-256. SAFE does not consume shared global random state. The result
+records padding, crop bounds, sampled factors, rotation settings, mask boxes,
+realized mask fraction, and all local seeds.
 
-class RandomMask:
-    def __init__(self, patch_size=16, max_mask_ratio=0.75, p=0.5):
-        self.patch_size = patch_size
-        self.max_mask_ratio = max_mask_ratio
-        self.p = p
+Validation and inference continue to use the normal deterministic 336 px model
+preparation defined in `src/cya_detector/transforms/preprocessing.py`; they do
+not use SAFE augmentation.
 
-    def __call__(self, img):
-        if random.random() > self.p:
-            return img
-        img_np = np.array(img)
-        h, w = img_np.shape[:2]
-        r = random.uniform(0, self.max_mask_ratio)
-        d = self.patch_size
-        n_patches = int((h * w * r) / (d * d))
+## Verification
 
-        for _ in range(n_patches):
-            y = random.randint(0, max(0, h - d))
-            x = random.randint(0, max(0, w - d))
-            img_np[y:y+d, x:x+d] = 0
+Run:
 
-        from PIL import Image
-        return Image.fromarray(img_np)
-```
-Applies with probability `p` (paper doesn't fix this — 0.5 is reasonable to start with).
-Randomly zeroes out `d×d` patches until up to `max_mask_ratio` (paper found even 75% masking
-still trains fine) of the image is covered, with no overlapping patches. The point: forces the
-detector to rely on many small local regions instead of one obvious global cue.
-
-### Putting it together
-
-```python
-train_transform = transforms.Compose([
-    transforms.RandomCrop(224),
-    transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5),
-    transforms.RandomRotation(degrees=180, fill=0),
-    RandomMask(patch_size=16, max_mask_ratio=0.75, p=0.5),
-    transforms.ToTensor(),
-    # + CLIP's normalization stats, whatever preprocessing CLIP expects
-])
-
-val_transform = transforms.Compose([
-    transforms.CenterCrop(224),
-    transforms.ToTensor(),
-    # same normalization, no augmentation — val/test should be deterministic
-])
+```bash
+make task3-test
 ```
 
-**Important:** augmentations (ColorJitter, RandomRotation, RandomMask) go in `train_transform`
-only. `val_transform` should stay deterministic (crop only) so evaluation results are
-reproducible and comparable across runs.
+The SAFE tests verify:
 
-## What SAFE does NOT cover (optional, only if there's time)
+- mutual exclusion between controlled and SAFE training policies;
+- rejection outside `seed_train`;
+- deterministic results for the same sample, epoch, and project seed;
+- correct symmetric padding and crop geometry;
+- the fixed operation order and recorded settings;
+- unique, non-overlapping grid-mask cells that never exceed the configured
+  maximum fraction; and
+- no mutation of global random state.
 
-The paper also proposes a frequency-domain feature (Discrete Wavelet Transform, extracting the
-high-frequency HH sub-band) as an additional input signal alongside the raw image. This is a
-separate, more involved addition — not required for a first working version, and probably not
-worth the implementation time relative to a CLIP-based classifier head, which already has
-strong pretrained visual features. Skip this unless there's time to spare after a first
-working model.
+## Before any SAFE experiment
 
-## Quick checklist before training
-
-- [ ] Crop, not resize, in both train and val transforms
-- [ ] ColorJitter + RandomRotation + RandomMask + HorizontalFlip applied together, train only
-- [ ] val_transform has no augmentation, only CenterCrop
-- [ ] Confirm final input size matches what the CLIP encoder expects (224 for ViT-B/32, 336 for ViT-L/14)
+- Version the resolved configuration and output root separately from controlled
+  RINE.
+- Keep the CLIP backbone frozen unless a different experiment explicitly says
+  otherwise.
+- Evaluate with the unchanged clean and 14-cell independent robustness
+  contract.
+- Compare all seeds against controlled RINE using the locked 50/50 and per-class
+  gates.
+- Reject the candidate if it fails those gates; never tune against or reread
+  `final_test`.
