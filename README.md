@@ -57,7 +57,7 @@ Run the test suite (no GPU or dataset required):
 python -m pytest tests/
 ```
 
-### Backend + frontend (optional UI demo)
+### Backend + frontend for UI demo for visualisation
 
 ```bash
 # Terminal 1 — backend API (from the repo root)
@@ -73,13 +73,27 @@ Open the printed frontend URL (default `http://localhost:5173`), drag in an
 image, and it's scored by the same controlled-RINE model as the CLI via
 `POST http://localhost:8000/predict`.
 
-## Steps to reproduce your results
+## Steps to reproduce results using CLI
 
-### Running the submission script
+### Running the submission script 
 
 ```bash
 python run_inference.py <path-to-image-directory> --output-dir <output-directory>
 ```
+
+**Judge quick start:** after completing the installation steps above, place an
+image directory in the repository root (for example, `judge_images/`) and run:
+
+```bash
+# Run from the repository root
+python run_inference.py judge_images --output-dir judge_output
+```
+
+The results will be written to `judge_output/predictions.json` and
+`judge_output/report.json`. The input directory may also be located elsewhere;
+pass its absolute or relative path in place of `judge_images`. Internet access
+is required on the first model-backed run so Hugging Face can download the
+frozen CLIP backbone. Later runs reuse the downloaded model cache.
 
 Recursively discovers `.jpg`/`.jpeg`/`.png`/`.webp`/`.tif`/`.tiff` files
 under `<path-to-image-directory>` (case-insensitive, symlinks never
