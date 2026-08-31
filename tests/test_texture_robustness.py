@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
+import cya_detector.evaluation.texture_robustness as robustness_module
 from cya_detector.config import ConfigError, load_config
 from cya_detector.data.manifest import (
     MANIFEST_FIELDS,
@@ -242,6 +243,110 @@ class TextureRobustnessMaterializationTests(unittest.TestCase):
         self.assertFalse(self.output_manifest.exists())
         self.assertFalse(self.report_path.exists())
         self.assertEqual(list(self.root.glob(".*stage1*")), [])
+
+    def test_rejects_adversarial_materialized_provenance_mutations(self) -> None:
+        original_materializer = robustness_module.materialize_benchmarks
+
+        def mutate_json(field: str, key: str, value: object):
+            def mutation(row: dict[str, str]) -> None:
+                payload = json.loads(row[field])
+                payload[key] = value
+                row[field] = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+            return mutation
+
+        mutations = (
+            (
+                "label",
+                lambda row: row.__setitem__(
+                    "label",
+                    "authentic" if row["label"] == "ai_generated" else "ai_generated",
+                ),
+            ),
+            ("source_id", lambda row: row.__setitem__("source_id", "spoofed-source")),
+            ("transform", lambda row: row.__setitem__("transform", "noise")),
+            (
+                "declared_parameter",
+                mutate_json("transform_parameter", "parameter", 999),
+            ),
+            (
+                "realized_parameter",
+                mutate_json("realized_parameters", "output_format", "GIF"),
+            ),
+            ("transform_seed", lambda row: row.__setitem__("transform_seed", "123")),
+            (
+                "output_storage_format",
+                lambda row: row.__setitem__("output_storage_format", "GIF"),
+            ),
+            (
+                "transform_version",
+                lambda row: row.__setitem__("transform_version", "spoofed-v0"),
+            ),
+            (
+                "preprocessing_version",
+                lambda row: row.__setitem__("preprocessing_version", "spoofed-v0"),
+            ),
+        )
+        for name, mutation in mutations:
+            with self.subTest(name=name):
+                def adversarial_materializer(**kwargs: object) -> dict[str, object]:
+                    report = original_materializer(**kwargs)
+                    manifest_path = Path(kwargs["output_manifest"])
+                    rows = read_manifest(manifest_path)
+                    mutation(rows[0])
+                    write_manifest(manifest_path, rows)
+                    report["output_manifest_sha256"] = sha256_file(manifest_path)
+                    return report
+
+                with patch(
+                    "cya_detector.evaluation.texture_robustness.materialize_benchmarks",
+                    side_effect=adversarial_materializer,
+                ):
+                    with self.assertRaises(TextureRobustnessError):
+                        materialize_texture_stage1(**self.materialize_args)
+
+                self.assertFalse(self.output_manifest.exists())
+                self.assertFalse(self.report_path.exists())
+
+    def test_second_publication_failure_rolls_back_new_manifest(self) -> None:
+        real_replace = robustness_module.os.replace
+
+        def fail_report_replace(source: object, destination: object) -> None:
+            if Path(destination) == self.report_path:
+                raise OSError("injected report publication failure")
+            real_replace(source, destination)
+
+        with patch(
+            "cya_detector.evaluation.texture_robustness.os.replace",
+            side_effect=fail_report_replace,
+        ):
+            with self.assertRaises(TextureRobustnessError):
+                materialize_texture_stage1(**self.materialize_args)
+
+        self.assertFalse(self.output_manifest.exists())
+        self.assertFalse(self.report_path.exists())
+
+    def test_second_publication_failure_restores_previous_manifest(self) -> None:
+        materialize_texture_stage1(**self.materialize_args)
+        previous_report = self.report_path.read_bytes()
+        previous_manifest = b"previous-valid-manifest\n"
+        self.output_manifest.write_bytes(previous_manifest)
+        real_replace = robustness_module.os.replace
+
+        def fail_report_replace(source: object, destination: object) -> None:
+            if Path(destination) == self.report_path:
+                raise OSError("injected report publication failure")
+            real_replace(source, destination)
+
+        with patch(
+            "cya_detector.evaluation.texture_robustness.os.replace",
+            side_effect=fail_report_replace,
+        ):
+            with self.assertRaises(TextureRobustnessError):
+                materialize_texture_stage1(**self.materialize_args)
+
+        self.assertEqual(self.output_manifest.read_bytes(), previous_manifest)
+        self.assertEqual(self.report_path.read_bytes(), previous_report)
 
     def test_cli_materializes_the_locked_matrix(self) -> None:
         result = subprocess.run(

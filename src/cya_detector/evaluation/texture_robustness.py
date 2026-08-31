@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
 from cya_detector.config import ConfigError
 from cya_detector.data.manifest import (
     read_manifest,
@@ -19,7 +21,7 @@ from cya_detector.data.manifest import (
     write_manifest,
 )
 from cya_detector.transforms import benchmark_cells
-from cya_detector.transforms.benchmark import TransformCell
+from cya_detector.transforms.benchmark import TransformCell, apply_benchmark, derive_seed
 from cya_detector.transforms.materialize import materialize_benchmarks
 
 STAGE1_CELL_IDS = (
@@ -276,11 +278,14 @@ def _validate_materialized_rows(
     rows: list[dict[str, str]],
     parents_by_id: dict[str, dict[str, str]],
     output_root: Path,
+    cells: Sequence[TransformCell],
+    config: dict[str, Any],
 ) -> None:
+    cells_by_id = {cell.cell_id: cell for cell in cells}
     expected_pairs = {
         (parent_id, cell_id)
         for parent_id in parents_by_id
-        for cell_id in STAGE1_CELL_IDS
+        for cell_id in cells_by_id
     }
     observed_pairs: set[tuple[str, str]] = set()
     for row in rows:
@@ -297,12 +302,18 @@ def _validate_materialized_rows(
         if pair not in expected_pairs or pair in observed_pairs:
             raise TextureRobustnessError(f"Unexpected or duplicate Stage-1 row: {pair!r}")
         observed_pairs.add(pair)
+        cell = cells_by_id[cell_id]
         if row.get("sample_id") != f"{parent_id}__benchmark__{cell_id}":
             raise TextureRobustnessError(f"Invalid materialized sample identity for {pair!r}")
         if row.get("split") != "selection_val" or row.get("image_view") != "benchmark":
             raise TextureRobustnessError(
                 "Materialized rows must remain selection_val benchmark views"
             )
+        for field in ("label", "source_id", "source_path", "dataset_name"):
+            if row.get(field) != parent.get(field):
+                raise TextureRobustnessError(
+                    f"Materialized {field} does not match its clean parent for {pair!r}"
+                )
         if row.get("parent_sha256") != parent["sha256"]:
             raise TextureRobustnessError(f"Materialized parent SHA-256 mismatch for {pair!r}")
         if _resolved(Path(row.get("clean_image_path", "")), owner="clean_image_path") != _resolved(
@@ -318,9 +329,101 @@ def _validate_materialized_rows(
             ) from exc
         if not image_path.is_file() or sha256_file(image_path) != row.get("sha256"):
             raise TextureRobustnessError(f"Materialized output SHA-256 mismatch for {pair!r}")
+
+        expected_declared = {
+            "cell_id": cell.cell_id,
+            "name": cell.name,
+            "output_format": cell.output_format,
+            "parameter": cell.parameter,
+            "stochastic": cell.stochastic,
+        }
+        expected_declared_json = json.dumps(
+            expected_declared, sort_keys=True, separators=(",", ":")
+        )
+        if row.get("transform_parameter") != expected_declared_json:
+            raise TextureRobustnessError(
+                f"Materialized declared parameters do not match locked cell {cell_id!r}"
+            )
+        expected_seed = derive_seed(config["runtime"]["seed"], parent_id, cell_id)
+        if row.get("transform_seed") != str(expected_seed):
+            raise TextureRobustnessError(
+                f"Materialized transform seed is not deterministic for {pair!r}"
+            )
+        if row.get("transform") != cell.name:
+            raise TextureRobustnessError(
+                f"Materialized transform name does not match locked cell {cell_id!r}"
+            )
+        if row.get("output_storage_format") != cell.output_format:
+            raise TextureRobustnessError(
+                f"Materialized storage format does not match locked cell {cell_id!r}"
+            )
+        engine = config["transform_engine"]
+        if (
+            row.get("transform_version") != engine["version"]
+            or row.get("preprocessing_version") != engine["preprocessing_version"]
+        ):
+            raise TextureRobustnessError(
+                f"Materialized engine versions do not match the frozen contract for {pair!r}"
+            )
+        try:
+            with Image.open(parent["image_path"]) as parent_image:
+                parent_image.load()
+                expected_realized = apply_benchmark(
+                    parent_image,
+                    cell,
+                    parent_id,
+                    config["runtime"]["seed"],
+                ).realized
+        except (OSError, ValueError) as exc:
+            raise TextureRobustnessError(
+                f"Could not verify realized transform parameters for {pair!r}"
+            ) from exc
+        expected_realized_json = json.dumps(
+            expected_realized, sort_keys=True, separators=(",", ":")
+        )
+        if row.get("realized_parameters") != expected_realized_json:
+            raise TextureRobustnessError(
+                f"Materialized realized parameters do not match locked cell {cell_id!r}"
+            )
     if observed_pairs != expected_pairs:
         missing = sorted(expected_pairs - observed_pairs)
         raise TextureRobustnessError(f"Stage-1 materialization is incomplete: {missing[:3]!r}")
+
+
+def _publish_materialization_bundle(
+    *,
+    staged_manifest: Path,
+    staged_report: Path,
+    output_manifest: Path,
+    report_path: Path,
+    token: str,
+) -> None:
+    """Publish report-last and restore the prior manifest if report publication fails."""
+
+    previous_manifest = output_manifest.read_bytes() if output_manifest.is_file() else None
+    rollback_manifest = _staging_sibling(output_manifest, f"rollback-{token}")
+    manifest_published = False
+    try:
+        os.replace(staged_manifest, output_manifest)
+        manifest_published = True
+        os.replace(staged_report, report_path)
+    except OSError as publication_error:
+        if manifest_published:
+            try:
+                if previous_manifest is None:
+                    output_manifest.unlink(missing_ok=True)
+                else:
+                    rollback_manifest.write_bytes(previous_manifest)
+                    os.replace(rollback_manifest, output_manifest)
+            except OSError as rollback_error:
+                raise TextureRobustnessError(
+                    "Stage-1 bundle publication failed and manifest rollback failed"
+                ) from rollback_error
+        raise TextureRobustnessError(
+            "Stage-1 bundle publication failed before the report completion marker"
+        ) from publication_error
+    finally:
+        rollback_manifest.unlink(missing_ok=True)
 
 
 def materialize_texture_stage1(
@@ -375,6 +478,8 @@ def materialize_texture_stage1(
             rows=rows,
             parents_by_id=parents_by_id,
             output_root=output_root,
+            cells=stage1_cells,
+            config=config,
         )
         if report.get("input_manifest_sha256") != selected_manifest_hash:
             raise TextureRobustnessError("Selected parent manifest changed during materialization")
@@ -401,8 +506,13 @@ def materialize_texture_stage1(
         write_json(staged_report, report)
         output_manifest.parent.mkdir(parents=True, exist_ok=True)
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(staged_manifest, output_manifest)
-        os.replace(staged_report, report_path)
+        _publish_materialization_bundle(
+            staged_manifest=staged_manifest,
+            staged_report=staged_report,
+            output_manifest=output_manifest,
+            report_path=report_path,
+            token=token,
+        )
         return report
     except TextureRobustnessError:
         raise
