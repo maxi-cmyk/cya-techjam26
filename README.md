@@ -20,28 +20,37 @@ failing the locked-score or robustness gate — see
 [Experimental history and rejected candidates](#experimental-history-and-rejected-candidates)
 below for why each one failed and what that implies.
 
+**Sealed `final_test` result (run exactly once, 2026-08-31, 141 held-out
+samples): 99.29% overall accuracy** — 100.00% AI-generated accuracy (69/69,
+zero false negatives), 98.61% authentic accuracy (71/72, one false
+positive). This is the project's final result; see
+[Task 10B](#task-10b--model-selection-calibration-and-resource-profiling)
+below for the full report and how it was produced.
+
 **Submission entry point:** [`run_inference.py`](run_inference.py) at the
 repository root:
 
 ```
-python run_inference.py <image_dir> --output-dir <output_dir> --checkpoint artifacts/robustness/train-controlled-rine/seed_42/best_50_50.pt
+python run_inference.py <image_dir> --output-dir <output_dir>
 ```
 
 It takes a directory of images and writes a `predictions.json` file of
 `{"image_path", "pred"}` confidence scores (0 = authentic, 1 = AI-generated),
 plus a `report.json` validation summary, using the real controlled-RINE
-seed-42 checkpoint. See
+seed-42 checkpoint by default (no flags needed if the checkpoint is present
+at its default path). See
 [Steps to reproduce your results](#steps-to-reproduce-your-results) for full
 commands, including how to restore the checkpoint. Everything else under
 `scripts/` is internal pipeline tooling (dataset construction, training,
 evaluation, robustness testing across Tasks 1–10) — not something a grader
 needs to run.
 
-**Current status:** the submission entry point is fully implemented, tested,
-and wired to the real, selected model (controlled RINE, seed 42) — see
-[Limitations and what we'd improve with more time](#limitations-and-what-wed-improve-with-more-time)
-for what's still outstanding (resource profiling on target hardware, the
-sealed `final_test` run).
+**Current status:** complete. The submission entry point is implemented,
+tested, and wired to the real, selected model (controlled RINE, seed 42),
+and the sealed `final_test` evaluation has run — 99.29% accuracy, above.
+The only outstanding item is resource profiling on target hardware (see
+[Limitations](#limitations-and-what-wed-improve-with-more-time)); it does
+not block the baseline being complete.
 
 ## Setup and installation instructions
 
@@ -131,6 +140,14 @@ sealed throughout — none of this reproduction path touches it.
   locally (it lives on the shared Drive artifact root, not in this
   checkout — see the notebook's own restore cell for the path).
 
+**`final_test` is not reproducible, by design — it has already been run,
+exactly once, and must never be run again.** `notebooks/11_final_test.ipynb`
+is the notebook that produced the 99.29% result above; `scripts/run_final_test.py`
+refuses outright (no resume, no overwrite) if it detects a prior result at
+its output root, so running it again against the existing output is a
+no-op failure, not a second real evaluation. Do not delete that output to
+force a rerun.
+
 ## Limitations and what we'd improve with more time
 
 - **Reported probabilities are uncalibrated (T=1) by deliberate decision, not
@@ -145,10 +162,6 @@ sealed throughout — none of this reproduction path touches it.
   errors (e.g. one of the robustness cells, or held-out data with induced
   noise), a non-degenerate fit would likely improve the usefulness of the
   reported confidence scores without changing any pass/fail decision.
-- **`final_test` has never been read.** Every result quoted here is on
-  `selection_val`; the sealed held-out set is reserved for exactly one
-  evaluation after the model, calibration, and threshold are fully frozen,
-  and that run hasn't happened yet.
 - **Robustness coverage stops at JPEG/blur/resize.** The locked evaluation
   only exercises the 14 independent Task 3 cells (four JPEG qualities, three
   blur levels, two resize scales, plus color/noise/crop families that were
@@ -362,16 +375,20 @@ Tests: `tests/test_c2pa_inference.py`, `tests/test_directory_inference.py`
   `checkpoint_disk_footprint()` reports on-disk checkpoint size. Both are
   model-agnostic and tested against fixtures; not yet run against the real
   checkpoint on the target Colab GPU.
-- **`final_test`: built and tested, not yet run.**
+- **`final_test`: run, exactly once — 99.29% accuracy.**
   `src/cya_detector/evaluation/final_test.py`'s `evaluate_final_test` is the
   only code in the repository permitted to read `final_test` rows — every
   other loader deliberately refuses them. It requires an explicit
   `confirm_final_test_read=True`, hash-verifies every image before scoring
   it, and refuses outright (no resume, no overwrite) if a prior result
-  already exists. `scripts/run_final_test.py` additionally gates behind
-  `--i-understand-this-is-irreversible`, and `notebooks/11_final_test.ipynb`
-  is the thin Colab launcher. Not yet run: the real `final_test` images live
-  in a 245MB Drive archive impractical to pull through a chat-based
-  connector — this has to run on Colab, where Drive/GPU access already
-  works.
+  already exists. Run via `notebooks/11_final_test.ipynb` on Colab on
+  2026-08-31 (`scripts/run_final_test.py` additionally gates behind
+  `--i-understand-this-is-irreversible`). **Result** on 141 held-out
+  samples: 99.29% overall accuracy, 100.00% AI-generated accuracy (69/69,
+  zero false negatives), 98.61% authentic accuracy (71/72, one false
+  positive), ECE 0.0189. `checkpoint_identity` in the published report
+  confirms it ran against the exact pinned checkpoint (seed 42, layers
+  [6, 12, 18, 24], resolved CLIP revision
+  `ce19dc912ca5cd21c8a653c79e251e808ccabcd1`). This is the project's final
+  result; it is never rerun.
 - **Not started:** any optional post-baseline experiment.
