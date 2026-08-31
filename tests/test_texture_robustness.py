@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import csv
+import hashlib
 import json
 import subprocess
 import sys
@@ -23,9 +25,13 @@ from cya_detector.data.manifest import (
 from cya_detector.evaluation.texture_robustness import (
     STAGE1_CELL_IDS,
     TextureRobustnessError,
+    evaluate_texture_stage1,
     materialize_texture_stage1,
     validate_robustness_contract,
 )
+from cya_detector.models.texture import build_texture_head
+from cya_detector.models.clip_baseline import LoadedClip
+from cya_detector.features.texture import prepare_texture_patch_views
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "configs/colab.json"
@@ -375,6 +381,328 @@ class TextureRobustnessMaterializationTests(unittest.TestCase):
         report = json.loads(self.report_path.read_text(encoding="utf-8"))
         self.assertEqual(report["stage1_cell_ids"], list(STAGE1_CELL_IDS))
         self.assertIn("Materialized 18 images", result.stdout)
+
+
+class TextureRobustnessEvaluationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.config = load_config(CONFIG_PATH)
+        self.input_manifest = self.root / "fixed_q96_manifest.csv"
+        self.output_root = self.root / "images"
+        self.output_manifest = self.root / "transformed_selection_val.csv"
+        self.report_path = self.root / "materialization_report.json"
+        rows = []
+        for label, color in (("authentic", "red"), ("ai_generated", "blue")):
+            image_path = self.root / f"{label}.jpg"
+            Image.new("RGB", (224, 224), color).save(
+                image_path, format="JPEG", quality=96, subsampling=0,
+                optimize=False, progressive=False, exif=b"",
+            )
+            row = {field: "" for field in MANIFEST_FIELDS}
+            row.update(
+                {
+                    "sample_id": f"{label}__matched_clean__fixed_q96",
+                    "source_id": label,
+                    "parent_id": f"{label}__source_original",
+                    "source_path": str((self.root / f"source-{label}.png").resolve()),
+                    "image_path": str(image_path.resolve()),
+                    "clean_image_path": str(image_path.resolve()),
+                    "image_view": "matched_clean", "sha256": sha256_file(image_path),
+                    "label": label, "split": "selection_val", "dataset_name": "fixture",
+                    "transform": "clean", "transform_seed": "42",
+                    "normalization_codec": "JPEG", "normalization_quality": "96",
+                    "output_storage_format": "JPEG",
+                }
+            )
+            rows.append(row)
+        write_manifest(self.input_manifest, rows)
+        materialize_texture_stage1(**self.materialize_args)
+        self.clean_root = self.root / "clean-runs"
+        self.cache_root = self.root / "cache"
+        self.prediction_root = self.root / "predictions"
+        self._write_clean_runs()
+
+    @property
+    def materialize_args(self) -> dict[str, object]:
+        return {
+            "input_manifest": self.input_manifest, "output_root": self.output_root,
+            "output_manifest": self.output_manifest, "report_path": self.report_path,
+            "config": self.config,
+        }
+
+    def _write_clean_runs(self) -> None:
+        import torch
+
+        for variant in ("global_only", "local_only", "global_local"):
+            for seed in (42, 43, 44):
+                run = self.clean_root / variant / f"seed_{seed}"
+                checkpoint = run / "checkpoints" / "best_clean.pt"
+                checkpoint.parent.mkdir(parents=True)
+                model = build_texture_head(
+                    variant=variant,
+                    layer_count=4,
+                    global_dimension=3,
+                    patch_dimension=3,
+                    fusion_dimension=256,
+                )
+                torch.save(
+                    {
+                        "model_state_dict": model.state_dict(),
+                        "stage": "texture_stage_d",
+                        "variant": variant,
+                        "seed": seed,
+                    },
+                    checkpoint,
+                )
+                prediction = run / "predictions" / "selection_val.csv"
+                prediction.parent.mkdir(parents=True)
+                with prediction.open("w", newline="", encoding="utf-8") as stream:
+                    writer = csv.DictWriter(
+                        stream,
+                        fieldnames=(
+                            "sample_id", "source_id", "parent_id", "split", "label",
+                            "logit", "probability", "checkpoint", "seed",
+                            "matching_policy", "transform", "transform_parameter",
+                            "dataset_name", "generator_name", "generator_checkpoint",
+                            "capture_source",
+                        ),
+                    )
+                    writer.writeheader()
+                    for label in ("authentic", "ai_generated"):
+                        writer.writerow(
+                            {
+                                "sample_id": f"{label}__matched_clean__fixed_q96",
+                                "source_id": label,
+                                "parent_id": f"{label}__source_original",
+                                "split": "selection_val",
+                                "label": label,
+                                "logit": "-1" if label == "authentic" else "1",
+                                "probability": "0.25" if label == "authentic" else "0.75",
+                                "checkpoint": "best_clean",
+                                "seed": seed,
+                                "matching_policy": "fixed_q96",
+                                "transform": "clean",
+                                "transform_parameter": "",
+                                "dataset_name": "fixture",
+                                "generator_name": "unknown",
+                                "generator_checkpoint": "unknown",
+                                "capture_source": "unknown",
+                            }
+                        )
+                metadata = run / "metadata" / "run_metadata.json"
+                metadata.parent.mkdir(parents=True)
+                metadata.write_text(
+                    json.dumps(
+                        {
+                            "status": "completed",
+                            "stage": "texture_stage_d",
+                            "variant": variant,
+                            "seed": seed,
+                            "matching_policy": "fixed_q96",
+                            "optimization": {"threshold": 0.5},
+                            "artifact_sha256": {
+                                "checkpoints/best_clean.pt": hashlib.sha256(
+                                    checkpoint.read_bytes()
+                                ).hexdigest(),
+                                "predictions/selection_val.csv": hashlib.sha256(
+                                    prediction.read_bytes()
+                                ).hexdigest(),
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+    @property
+    def evaluation_args(self) -> dict[str, object]:
+        return {
+            "transformed_manifest": self.output_manifest,
+            "materialization_report": self.report_path,
+            "clean_experiment_root": self.clean_root,
+            "cache_root": self.cache_root,
+            "output_root": self.prediction_root,
+            "config": self.config,
+            "device": "cpu",
+        }
+
+    def _fake_features(self, **kwargs: object):
+        import torch
+
+        rows = read_manifest(Path(kwargs["transformed_manifest"]))
+        return [
+            {
+                "manifest_row": row,
+                "global_features": torch.ones((4, 3)),
+                "patch_features": torch.ones((4, 3)),
+                "patch_mask": torch.ones(4, dtype=torch.bool),
+                "patch_boxes": ((0, 0, 112, 112),) * 4,
+                "global_feature_sha256": "a" * 64,
+                "patch_feature_sha256": "b" * 64,
+                "cache_contract_sha256": "c" * 64,
+            }
+            for row in rows
+        ], {"encoded_image_count": len(rows) * 5, "cache_hit_count": 0}
+
+    def test_evaluates_all_81_slices_with_one_shared_extraction(self) -> None:
+        with patch(
+            "cya_detector.evaluation.texture_robustness._extract_transformed_feature_bank",
+            side_effect=self._fake_features,
+        ) as extraction:
+            summary = evaluate_texture_stage1(**self.evaluation_args)
+
+        self.assertEqual(summary["completed_slices"], 81)
+        self.assertEqual(extraction.call_count, 1)
+        self.assertEqual(len(list(self.prediction_root.rglob("*.csv"))), 81)
+        slice_metadata = json.loads(
+            next(self.prediction_root.rglob("*.meta.json")).read_text(encoding="utf-8")
+        )
+        self.assertEqual(slice_metadata["inference"]["sample_count"], 2)
+        self.assertGreaterEqual(slice_metadata["inference"]["latency_seconds"], 0.0)
+
+    def test_resume_requires_valid_slice_hashes_and_keeps_checkpoints_immutable(self) -> None:
+        checkpoints = list(self.clean_root.rglob("best_clean.pt"))
+        before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in checkpoints}
+        with patch(
+            "cya_detector.evaluation.texture_robustness._extract_transformed_feature_bank",
+            side_effect=self._fake_features,
+        ):
+            evaluate_texture_stage1(**self.evaluation_args)
+            resumed = evaluate_texture_stage1(**self.evaluation_args)
+        self.assertEqual(resumed["resumed_slices"], 81)
+        self.assertEqual(
+            before,
+            {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in checkpoints},
+        )
+
+        corrupt = next(self.prediction_root.rglob("*.csv"))
+        corrupt.write_text("partial", encoding="utf-8")
+        with patch(
+            "cya_detector.evaluation.texture_robustness._extract_transformed_feature_bank",
+            side_effect=self._fake_features,
+        ):
+            repaired = evaluate_texture_stage1(**self.evaluation_args)
+        self.assertEqual(repaired["resumed_slices"], 80)
+
+    def test_rejects_forbidden_split_before_feature_extraction_or_publication(self) -> None:
+        rows = read_manifest(self.output_manifest)
+        rows[0]["split"] = "final_test"
+        write_manifest(self.output_manifest, rows)
+        with patch(
+            "cya_detector.evaluation.texture_robustness._extract_transformed_feature_bank"
+        ) as extraction:
+            with self.assertRaisesRegex(TextureRobustnessError, "selection_val"):
+                evaluate_texture_stage1(**self.evaluation_args)
+        extraction.assert_not_called()
+        self.assertFalse(self.prediction_root.exists())
+
+    def test_rejects_changed_clean_threshold_and_nonfinite_logits_without_publication(self) -> None:
+        import torch
+
+        run = self.clean_root / "global_only" / "seed_42"
+        metadata_path = run / "metadata" / "run_metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["optimization"]["threshold"] = 0.4
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        with patch(
+            "cya_detector.evaluation.texture_robustness._extract_transformed_feature_bank",
+            side_effect=self._fake_features,
+        ):
+            with self.assertRaisesRegex(TextureRobustnessError, "threshold mismatch"):
+                evaluate_texture_stage1(**self.evaluation_args)
+        self.assertFalse(self.prediction_root.exists())
+
+        metadata["optimization"]["threshold"] = 0.5
+        checkpoint = run / "checkpoints" / "best_clean.pt"
+        payload = torch.load(checkpoint, weights_only=False)
+        first = next(iter(payload["model_state_dict"]))
+        payload["model_state_dict"][first].fill_(float("nan"))
+        torch.save(payload, checkpoint)
+        metadata["artifact_sha256"]["checkpoints/best_clean.pt"] = hashlib.sha256(
+            checkpoint.read_bytes()
+        ).hexdigest()
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        with patch(
+            "cya_detector.evaluation.texture_robustness._extract_transformed_feature_bank",
+            side_effect=self._fake_features,
+        ):
+            with self.assertRaisesRegex(TextureRobustnessError, "non-finite outputs"):
+                evaluate_texture_stage1(**self.evaluation_args)
+        self.assertFalse(self.prediction_root.exists())
+
+    def test_real_extraction_recomputes_transformed_boxes_once_and_binds_cache_contract(self) -> None:
+        import numpy as np
+        import torch
+
+        class FakeProcessor:
+            def __call__(self, *, images, return_tensors):
+                array = np.asarray(images, dtype=np.float32)
+                value = float(array.mean() / 255.0)
+                return {"pixel_values": torch.full((1, 3, 8, 8), value)}
+
+        class FakeModel:
+            def __init__(self):
+                self.config = type(
+                    "Config", (), {"num_hidden_layers": 24, "hidden_size": 3}
+                )()
+                self.encoded_image_count = 0
+
+            def __call__(
+                self, *, pixel_values, output_hidden_states=False, return_dict=False
+            ):
+                batch = pixel_values.shape[0]
+                self.encoded_image_count += batch
+                base = pixel_values.mean(dim=(1, 2, 3)).view(batch, 1, 1)
+                result = type("Output", (), {})()
+                result.image_embeds = base.repeat(1, 1, 3).reshape(batch, 3)
+                if output_hidden_states:
+                    result.hidden_states = tuple(
+                        (base + index).repeat(1, 1, 3) for index in range(25)
+                    )
+                return result
+
+        manifest_rows = read_manifest(self.output_manifest)
+        selected = manifest_rows[:1]
+        transformed = np.zeros((224, 224, 3), dtype=np.uint8)
+        transformed[112:, 112:] = np.indices((112, 112)).sum(axis=0)[..., None] % 2 * 255
+        image_path = Path(selected[0]["image_path"])
+        Image.fromarray(transformed).save(image_path, format="JPEG", quality=95)
+        selected[0]["sha256"] = sha256_file(image_path)
+        fake_model = FakeModel()
+        loaded = LoadedClip(
+            model=fake_model, processor=FakeProcessor(), identifier="fixture/clip",
+            requested_revision="main", resolved_revision="a" * 40,
+            embedding_dimension=3,
+        )
+        with patch(
+            "cya_detector.evaluation.texture_robustness.load_frozen_clip",
+            return_value=loaded,
+        ):
+            extracted, report = robustness_module._extract_transformed_feature_bank(
+                transformed_manifest=self.output_manifest,
+                rows=selected,
+                cache_root=self.cache_root,
+                config=self.config,
+                device="cpu",
+            )
+
+        expected = prepare_texture_patch_views(
+            transformed,
+            patch_size=self.config["texture"]["patch_size"],
+            patch_count=self.config["texture"]["patch_count"],
+        ).patch_boxes
+        self.assertEqual(extracted[0]["patch_boxes"], expected)
+        self.assertEqual(fake_model.encoded_image_count, 1 + len(expected))
+        self.assertEqual(report["encoded_image_count"], fake_model.encoded_image_count)
+        cache_file = next((self.cache_root / "patch").rglob("*.pt"))
+        cache_contract = torch.load(cache_file, weights_only=True)["cache_contract"]
+        for key in (
+            "input_sha256", "parent_sha256", "cell_contract", "resolved_revision",
+            "preprocessing_version", "texture_extractor_version", "matching_policy",
+            "patch_size", "patch_count", "patch_boxes",
+        ):
+            self.assertIn(key, cache_contract)
 
 
 if __name__ == "__main__":
