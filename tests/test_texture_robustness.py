@@ -171,8 +171,6 @@ class TextureRobustnessMaterializationTests(unittest.TestCase):
 
     def test_rejects_forbidden_split_view_policy_or_chaining_before_writing(self) -> None:
         cases = (
-            ("split", "final_test"),
-            ("split", "self_train_pool"),
             ("image_view", "benchmark"),
             ("transform", "blur"),
             ("normalization_quality", "95"),
@@ -187,6 +185,23 @@ class TextureRobustnessMaterializationTests(unittest.TestCase):
                 self.assertFalse(self.output_root.exists())
                 self.assertFalse(self.output_manifest.exists())
                 self.assertFalse(self.report_path.exists())
+
+    def test_filters_non_selection_val_splits_without_reading_or_materializing_them(self) -> None:
+        # The fixed-Q96 source manifest spans every split (seed_train,
+        # selection_val, self_train_pool, final_test); Stage-1 must select only
+        # selection_val parents and silently ignore every other row rather than
+        # treating their mere presence in the manifest as a fatal error.
+        for split in ("final_test", "self_train_pool"):
+            with self.subTest(split=split):
+                self._write_parents()
+                self._mutate_parent("split", split)
+
+                report = materialize_texture_stage1(**self.materialize_args)
+
+                output_rows = read_manifest(self.output_manifest)
+                self.assertEqual(report["parent_count"], 1)
+                self.assertEqual(len(output_rows), len(STAGE1_CELL_IDS))
+                self.assertEqual({row["split"] for row in output_rows}, {"selection_val"})
 
     def test_filters_seed_train_without_reading_or_materializing_it(self) -> None:
         rows = read_manifest(self.input_manifest)

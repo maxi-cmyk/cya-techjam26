@@ -213,18 +213,10 @@ def _require_locked_parent_rows(
         raise TextureRobustnessError(
             f"Could not read fixed-Q96 input manifest {input_manifest}: {exc}"
         ) from exc
-    forbidden_splits = sorted(
-        {
-            row.get("split", "")
-            for row in input_rows
-            if row.get("split") not in {"seed_train", "selection_val"}
-        }
-    )
-    if forbidden_splits:
-        raise TextureRobustnessError(
-            "Stage-1 source manifest contains forbidden split(s): "
-            + ", ".join(repr(value) for value in forbidden_splits)
-        )
+    # The fixed-Q96 source manifest legitimately spans every split (seed_train,
+    # selection_val, self_train_pool, final_test); only selection_val rows are
+    # ever selected as Stage-1 parents, and every other row is silently
+    # ignored rather than treated as a fatal contamination of the manifest.
     parents = [row for row in input_rows if row.get("split") == "selection_val"]
     if not parents:
         raise TextureRobustnessError("Stage-1 input manifest must contain selection_val parents")
