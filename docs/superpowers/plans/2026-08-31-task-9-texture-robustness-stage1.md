@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a resumable, frozen-checkpoint Stage-1 robustness evaluation that compares the clean Task 9 texture heads across nine texture-sensitive Task 3 transform cells and emits a deterministic continuation decision.
+**Goal:** Build a resumable, frozen-checkpoint Stage-1 robustness evaluation that compares the clean Task 9 texture heads with both the internal global-only ablation and retained controlled RINE across nine texture-sensitive Task 3 transform cells and emits a deterministic continuation decision.
 
-**Architecture:** Materialize transformed `selection_val` images directly from fixed-Q96 clean parents, extract transformed global/patch features once, and reuse them across all variants and seeds. Evaluate immutable best-clean checkpoints without training, then publish per-cell metrics and a hashed aggregate gate under a new Drive-safe artifact subtree.
+**Architecture:** Materialize transformed `selection_val` images directly from fixed-Q96 clean parents, extract transformed global/patch features once, and reuse them across all variants and seeds. Evaluate immutable best-clean checkpoints without training, join hash-verified controlled-RINE predictions on the identical parents and nine cells, then publish per-cell metrics and a hashed aggregate gate under a new Drive-safe artifact subtree.
 
 **Tech Stack:** Python 3.11, PyTorch, Pillow, NumPy, existing Task 3 transform engine, existing frozen CLIP/RINE loader, `unittest`, Google Colab.
 
@@ -15,7 +15,8 @@
 - Input is fixed-Q96 matched-clean `selection_val` only; reject every other split/view/policy.
 - Use exactly `jpeg_q90`, `jpeg_q70`, `jpeg_q50`, `jpeg_q30`, `blur_sigma_0.5`, `blur_sigma_1.0`, `blur_sigma_2.0`, `resize_scale_0.5`, and `resize_scale_0.25`.
 - Every transformed row derives directly from clean; transform chaining is forbidden.
-- Evaluate `global_only`, `local_only`, and `global_local` for seeds `42`, `43`, and `44`; only `global_local` versus `global_only` controls the decision.
+- Evaluate `global_only`, `local_only`, and `global_local` for seeds `42`, `43`, and `44`; `global_local` must pass against both `global_only` and the retained controlled-RINE parent. `local_only` is diagnostic.
+- Restore the three controlled-RINE per-seed `predictions.csv` artifacts, require all 27 seed-cell partitions for the same nine cells and seeds, verify their source manifest/checkpoint/output hashes, and recompute the nine-cell comparator score. Do not substitute the persisted 14-cell aggregate (`0.9981`).
 - Recompute patch selection from each transformed image; never reuse clean coordinates.
 - Checkpoints, threshold, and clean calibration are immutable. No training or fine-tuning is permitted.
 - Never read `seed_train`, `self_train_pool`, or sealed `final_test` in this continuation.
@@ -46,6 +47,7 @@ def test_texture_robustness_contract_is_exact_and_locked(self):
     self.assertEqual(contract.cell_ids, STAGE1_CELL_IDS)
     self.assertEqual(contract.variants, ("global_only", "local_only", "global_local"))
     self.assertEqual(contract.seeds, (42, 43, 44))
+    self.assertEqual(contract.controlling_comparators, ("global_only", "controlled_rine"))
     self.assertEqual(contract.aggregate_class_tolerance, 0.01)
     self.assertEqual(contract.worst_cell_tolerance, 0.03)
 
@@ -215,7 +217,7 @@ git commit -m "feat: evaluate frozen texture heads under transforms"
 
 ---
 
-### Task 4: Compute the Locked Robustness Gate and Reports
+### Task 4: Verify Controlled RINE and Compute the Locked Robustness Gate
 
 **Files:**
 - Create: `scripts/compare_texture_robustness.py`
@@ -223,8 +225,8 @@ git commit -m "feat: evaluate frozen texture heads under transforms"
 - Modify: `tests/test_texture_robustness.py`
 
 **Interfaces:**
-- Consumes: clean comparison artifacts plus 81 validated prediction slices.
-- Produces: `compare_texture_stage1(*, clean_experiment_root: Path, robustness_root: Path, config: dict) -> dict[str, Any]` and the complete report/manifest tree.
+- Consumes: clean comparison artifacts, 81 validated texture prediction slices, and three persisted controlled-RINE per-seed prediction files containing all 27 required seed-cell partitions from the completed Task 3 robustness run.
+- Produces: `compare_texture_stage1(*, clean_experiment_root: Path, robustness_root: Path, controlled_rine_root: Path, config: dict) -> dict[str, Any]` and the complete report/manifest tree.
 
 - [ ] **Step 1: Write failing metric and gate tests**
 
@@ -232,26 +234,30 @@ git commit -m "feat: evaluate frozen texture heads under transforms"
 def test_retains_only_when_locked_score_and_every_regression_gate_pass(self):
     report = compare_texture_stage1(**self.comparison_args)
     self.assertEqual(report["decision"], "retain_texture_for_full_robustness")
-    self.assertGreater(report["aggregate"]["locked_score_delta"], 0.0)
+    self.assertGreater(report["comparators"]["global_only"]["locked_score_delta"], 0.0)
+    self.assertGreater(report["comparators"]["controlled_rine"]["locked_score_delta"], 0.0)
 
-def test_rejects_each_gate_independently(self):
-    for mutation in (
-        self.lower_locked_score,
-        self.lower_robustness_mean,
-        self.regress_authentic_mean_beyond_one_point,
-        self.regress_ai_mean_beyond_one_point,
-        self.regress_one_cell_overall_beyond_three_points,
-        self.regress_one_cell_authentic_beyond_three_points,
-        self.regress_one_cell_ai_beyond_three_points,
-    ):
-        mutation()
-        self.assertEqual(
-            compare_texture_stage1(**self.comparison_args)["decision"],
-            "reject_texture_robustness_stage1",
-        )
+def test_recomputes_controlled_rine_on_the_exact_nine_cell_subset(self):
+    report = compare_texture_stage1(**self.comparison_args)
+    self.assertEqual(report["comparators"]["controlled_rine"]["cell_count"], 9)
+
+def test_missing_or_mismatched_controlled_rine_blocks_comparison(self):
+    self.remove_one_controlled_rine_slice()
+    with self.assertRaises(TextureRobustnessPrerequisiteError):
+        compare_texture_stage1(**self.comparison_args)
+
+def test_rejects_each_gate_independently_against_either_comparator(self):
+    for comparator in ("global_only", "controlled_rine"):
+        for mutation in self.gate_mutations(comparator):
+            self.reset_comparison_fixture()
+            mutation()
+            self.assertEqual(
+                compare_texture_stage1(**self.comparison_args)["decision"],
+                "reject_texture_robustness_stage1",
+            )
 ```
 
-Test equal macro weighting, paired bootstrap determinism, ECE/confusion matrices, corrected/introduced errors, local-only diagnostic reporting, latency/memory finiteness, exact 81-slice completeness, and manifest-last hash publication.
+Test equal macro weighting, paired bootstrap determinism, ECE/confusion matrices, corrected/introduced errors against both comparators, local-only diagnostic reporting, latency/memory finiteness, exact 81 texture-slice plus 27 controlled-RINE-partition completeness, comparator provenance hashes, and manifest-last hash publication.
 
 - [ ] **Step 2: Run tests and verify RED**
 
@@ -259,7 +265,7 @@ Run the Task 2 focused command. Expected: FAIL because comparison is absent.
 
 - [ ] **Step 3: Implement metrics, deterministic gate, and publication**
 
-Compute clean and robustness means exactly as specified. Average seeds within cells for worst-cell checks. Use the existing evaluation metric helpers where their label semantics match. Write `per_cell_metrics.csv`, `per_seed_robustness.csv`, `robustness_comparison.json`, `latency_and_memory.json`, `failure_analysis.csv`, then hash every required durable artifact and publish `artifact_manifest.json` last.
+Validate the controlled-RINE source manifest, checkpoint, prediction hashes, exact seeds/cells, and sample/label alignment before computing any decision. Recompute its clean and nine-cell robustness means from per-sample artifacts. Compute texture means exactly as specified and require `global_local` to pass every improvement and regression condition against both controlling comparators. Average seeds within cells for worst-cell checks. Use the existing evaluation metric helpers where their label semantics match. Write `per_cell_metrics.csv`, `per_seed_robustness.csv`, `robustness_comparison.json`, `latency_and_memory.json`, `failure_analysis.csv`, then hash every required durable artifact and comparator reference and publish `artifact_manifest.json` last.
 
 - [ ] **Step 4: Verify GREEN and CLI**
 
@@ -301,11 +307,11 @@ Run the Task 2 focused command. Expected: FAIL because launcher and targets are 
 
 - [ ] **Step 3: Add sequential Make targets and thin resumable notebook**
 
-Use overridable variables rooted at the clean Drive artifacts and `/content`. The notebook mounts Drive, checks out the exact branch/commit, restores the Task 2 bundle and nine clean runs, invokes the three CLIs, inspects an initial slice, resumes verified predictions, and copies completed report artifacts only. It must never create a completed marker before comparison succeeds.
+Use overridable variables rooted at the clean Drive artifacts and `/content`. The notebook mounts Drive, checks out the exact branch/commit, restores the Task 2 bundle, nine clean runs, and the controlled-RINE manifests/checkpoints/predictions required for the exact nine-cell comparison; invokes the three CLIs; inspects an initial slice; resumes verified predictions; and copies completed report artifacts only. It must never create a completed marker before comparison succeeds.
 
 - [ ] **Step 4: Update documentation with the real clean result and pending robustness status**
 
-Record clean means (`global_only` 0.993939, `local_only` 0.953535, `global_local` 1.0), the verified clean decision, the Stage-1 matrix/gate, and the fact that final retention/final test remain pending. Do not mark robustness complete before the real Colab run.
+Record clean means (`global_only` 0.993939, `local_only` 0.953535, `global_local` 1.0), controlled RINE (`1.0` clean and `0.9981` locked across the full 14-cell matrix), the requirement to recompute its nine-cell subset, the verified clean decision, the Stage-1 matrix/gate, and the fact that final retention/final test remain pending. Do not mark robustness complete before the real Colab run.
 
 - [ ] **Step 5: Run focused tests, lint, and smoke checks**
 
@@ -324,7 +330,7 @@ conda run -n cya-techjam26 cmd /d /c "set PYTHONPATH=src&&python -m unittest dis
 conda run -n cya-techjam26 cmd /d /c "set PYTHONPATH=src&&python -m unittest tests.test_texture_robustness.TextureRobustnessFixtureSmokeTests -v"
 ```
 
-The fixture must execute materialization → shared fake extraction → 81 frozen evaluations → gate → hashed publication under a temporary root and prove no writes beneath real `artifacts/` or Drive paths.
+The fixture must execute materialization → shared fake extraction → 81 frozen texture evaluations → three hash-verified controlled-RINE files containing 27 seed-cell partitions → two-comparator gate → hashed publication under a temporary root and prove no writes beneath real `artifacts/` or Drive paths.
 
 - [ ] **Step 7: Commit**
 

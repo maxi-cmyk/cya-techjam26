@@ -8,14 +8,14 @@ This specification defines a frozen-checkpoint, inference-only robustness screen
 
 ## Objective
 
-Determine whether the clean-pilot `global_local` texture head preserves an advantage over `global_only` under the texture-sensitive subset of the existing Task 3 benchmark contract, without hiding class-specific or single-cell regressions.
+Determine whether the clean-pilot `global_local` texture head preserves an advantage over its internal `global_only` ablation and improves on the retained controlled-RINE parent under the texture-sensitive subset of the existing Task 3 benchmark contract, without hiding class-specific or single-cell regressions.
 
 The experiment evaluates all clean-trained variants and seeds:
 
 - variants: `global_only`, `local_only`, `global_local`
 - seeds: `42`, `43`, `44`
 
-Only `global_local` versus `global_only` controls the decision. `local_only` is diagnostic.
+The retained controlled-RINE run is the authoritative parent comparator. `global_local` must beat both controlled RINE and its internal `global_only` ablation; `local_only` is diagnostic. Controlled RINE has `1.0` clean accuracy and a `0.9981` locked 50/50 score across the full 14-cell Task 3 matrix. Stage 1 must recompute its nine-cell subset from persisted per-sample predictions instead of substituting that full-matrix aggregate.
 
 ## Data and leakage boundary
 
@@ -39,7 +39,7 @@ Noise, color jitter, and center crop are deferred. A Stage-1 pass authorizes the
 
 ## Architecture and data flow
 
-1. Restore the fixed-Q96 Task 2 bundle and all nine completed clean Task 9 runs.
+1. Restore the fixed-Q96 Task 2 bundle, all nine completed clean Task 9 runs, and the hash-verified three-seed controlled-RINE prediction artifacts from the completed Task 3 robustness evaluation.
 2. Select and validate only matched-clean `selection_val` parents.
 3. Materialize the nine Stage-1 cells directly from clean parents using the existing Task 3 materializer.
 4. Verify cell counts, labels, sample/parent identity, hashes, split integrity, and the no-chaining contract.
@@ -49,7 +49,7 @@ Noise, color jitter, and center crop are deferred. A Stage-1 pass authorizes the
 8. Reuse the immutable transformed feature caches across variants and seeds.
 9. Load each existing best-clean checkpoint without mutation and emit predictions for every variant/seed/cell slice.
 10. Require all `9 cells × 3 variants × 3 seeds = 81` slices before comparison.
-11. Compare `global_local` with `global_only`, report `local_only` diagnostically, apply the predeclared gate, and publish a hashed completion manifest last.
+11. Require the 27 controlled-RINE seed-cell partitions for the same nine cells and three seeds from the three persisted per-seed `predictions.csv` files, then compare `global_local` with both controlled RINE and `global_only`, report `local_only` diagnostically, apply the predeclared gate, and publish a hashed completion manifest last.
 
 Materializing transformed images before extraction is intentional: it uses the existing provenance contract, permits independent verification, and makes interruption recovery deterministic. Large images and feature caches stay under `/content`; durable predictions and reports are copied to Drive.
 
@@ -78,6 +78,8 @@ Each prediction row records sample ID, parent ID, label, cell ID and parameters,
 
 `artifact_manifest.json` is the completion marker and is published last. It records the experiment status and decision plus hashes for every durable input and output required to reproduce the decision.
 
+The manifest also records the source root and hashes of the controlled-RINE prediction and metric artifacts. Comparator artifacts remain read-only and are not republished as Task 9 outputs.
+
 ## Metrics
 
 For every variant, seed, and transform cell, report:
@@ -87,7 +89,7 @@ For every variant, seed, and transform cell, report:
 - AI-generated accuracy and false-negative rate;
 - confusion matrix;
 - expected calibration error under unchanged clean calibration;
-- corrected and introduced errors relative to `global_only`;
+- corrected and introduced errors relative to both `global_only` and controlled RINE;
 - inference latency and peak GPU memory;
 - patch availability and selected-patch stability diagnostics.
 
@@ -115,17 +117,21 @@ global_local locked_50_50_score > global_only locked_50_50_score
 
 global_local robustness_accuracy >= global_only robustness_accuracy
 
-mean robust authentic accuracy delta >= -0.01
+global_local locked_50_50_score > controlled_rine locked_50_50_score
 
-mean robust AI-generated accuracy delta >= -0.01
+global_local robustness_accuracy >= controlled_rine robustness_accuracy
+
+mean robust authentic accuracy delta versus each comparator >= -0.01
+
+mean robust AI-generated accuracy delta versus each comparator >= -0.01
 
 for every transform cell, after averaging across seeds:
-    overall accuracy delta >= -0.03
-    authentic accuracy delta >= -0.03
-    AI-generated accuracy delta >= -0.03
+    overall accuracy delta versus each comparator >= -0.03
+    authentic accuracy delta versus each comparator >= -0.03
+    AI-generated accuracy delta versus each comparator >= -0.03
 ```
 
-Otherwise emit `reject_texture_robustness_stage1` and retain the global representation without the texture addition.
+Otherwise emit `reject_texture_robustness_stage1` and retain controlled RINE without the texture addition. Missing, mismatched, or unverifiable controlled-RINE artifacts are a blocked prerequisite, never a texture pass or rejection.
 
 A pass authorizes a separately controlled evaluation of the remaining Task 3 noise, color-jitter, and crop cells. It does not authorize final retention, calibration changes, transformed training, packaging, or final-test evaluation.
 
@@ -134,7 +140,7 @@ A pass authorizes a separately controlled evaluation of the remaining Task 3 noi
 - Publish prediction slices atomically.
 - Skip a completed slice only when its complete artifact set and hashes validate against the exact experiment contract.
 - Recompute missing, malformed, partial, non-finite, or hash-mismatched slices.
-- Do not run comparison until all 81 slices validate and sample/label sets align.
+- Do not run comparison until all 81 texture slices and all 27 controlled-RINE seed-cell partitions validate and sample/label sets align.
 - Reject any clean/transformed parent mismatch, forbidden split, transform-chain evidence, checkpoint mismatch, model/preprocessing mismatch, or cache-contract mismatch.
 - Reject non-finite features, logits, probabilities, metrics, latency, or memory measurements.
 - Never treat a partially copied Drive directory as complete.
@@ -150,9 +156,10 @@ Automated tests must prove:
 - clean patch coordinates cannot be reused;
 - checkpoints and clean artifacts remain unchanged;
 - feature-cache identity includes every material transform/model/texture contract field;
-- all 81 slices are required and aligned before comparison;
+- all 81 texture slices and 27 controlled-RINE seed-cell partitions are required and aligned before comparison;
 - the 50/50 score uses equal macro weighting across cells and seeds;
-- aggregate class tolerances and each worst-cell condition fail independently;
+- the controlled-RINE nine-cell score is recomputed from hash-verified per-sample predictions rather than copied from its 14-cell aggregate;
+- improvement, aggregate class tolerances, and each worst-cell condition fail independently against either controlling comparator;
 - resume accepts only hash-verified completed slices;
 - corrupt, partial, mismatched, non-finite, and forbidden-split inputs fail closed;
 - no normal continuation path can read `final_test`;
