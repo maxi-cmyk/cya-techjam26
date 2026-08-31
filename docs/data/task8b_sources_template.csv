@@ -1,3 +1,0 @@
-relative_path,dataset_name,source_subset,label,license_status,processing_state,device_id,camera_make,camera_model,lens_model,focal_length,content_category,generator_paradigm,generator_name,generator_checkpoint,decoder_family
-premier/N1/D01/image001.jpg,premier,N1,authentic,cc-by-sa-4.0,native_camera,D01,Apple,iPhone4s,unknown,unknown,natural,,,,
-genimage_ai/Stable_Diffusion_v1.4/ai/example.png,genimage,Stable_Diffusion_v1.4,ai_generated,cc-by-nc-sa-4.0,native_generator_export,,,,,natural,diffusion,Stable_Diffusion_v1.4,v1.4,VAE
