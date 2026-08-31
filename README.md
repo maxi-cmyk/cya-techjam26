@@ -56,3 +56,48 @@ AUC 0.859 and top-1 accuracy 0.657 versus 0.10 random at the binary-compatible
 RINE+PRNU is rejected after severe seed instability (33.43% mean versus 99.81%
 for controlled RINE). The experiment preserves the original evidence, writes
 only under `artifacts/task8b_v2`, and keeps the competition `final_test` sealed.
+
+## Task 9 result
+
+The texture-aware local-detail path (Task 9) passed its clean gate (100%
+`global_local` clean accuracy versus 99.394% for the internal `global_only`
+ablation) but was **rejected** at the frozen-checkpoint Stage-1 robustness
+screen: `global_local` tied controlled RINE on clean accuracy but scored
+93.13% mean robustness accuracy versus 99.80% for controlled RINE, with both
+locked-score deltas negative and multiple worst-cell failures — most severely
+`resize_scale_0.25`, where AI-generated accuracy collapsed to 50.2%
+(`global_local`) and 18.4% (`local_only`, near-random). The local patch
+signal is fragile under aggressive downsampling/blur/compression. **Controlled
+RINE (Task 6) is the sole retained model** going into Task 10; no texture,
+frequency, Lab, or PRNU fusion candidate is retained.
+
+## Task 10A — Inference skeleton (in progress)
+
+A model-agnostic, synchronous directory-inference CLI: given an image
+directory, discover supported images deterministically, run a Stage 0 C2PA
+verified-claim check per image, call an injected `predict_probability`
+function for everything C2PA doesn't early-exit, and publish a public
+`{"image_path", "pred"}` JSON array plus a separate validation report. No real
+model is wired in yet — that, calibration, and the sealed `final_test` run are
+Task 10B. Design lives at
+`docs/superpowers/specs/2026-08-31-task-10a-inference-skeleton-design.md` (in
+progress) on the `task10a-inference-skeleton` branch/worktree.
+
+Implementation is split for parallel work:
+
+- **Shared, first:** `src/cya_detector/inference/contracts.py` — pure types
+  (`ValidationError`, `PredictionRecord`, `RunSummary`, the `Predictor`
+  protocol, exit-code constants). Both streams below depend on it immediately.
+- **Stream A — input & trust boundary:** `src/cya_detector/inference/inputs.py`
+  (recursive discovery, decode/validate/normalize, decompression-bomb guard)
+  and `src/cya_detector/inference/c2pa.py` (Stage 0 verified-claim check), with
+  `tests/test_c2pa_inference.py`.
+- **Stream B — orchestration & output:** `src/cya_detector/inference/runner.py`,
+  `src/cya_detector/inference/output.py`, `src/cya_detector/inference/cli.py`,
+  and `scripts/run_inference.py`, with `tests/test_inference_cli.py`. Stream B
+  can proceed immediately against a fake predictor and fake C2PA function via
+  dependency injection — it does not need Stream A's real implementations to
+  make progress.
+- **Integration, last:** `tests/test_directory_inference.py` exercises the
+  full pipeline end-to-end; write it once both streams land, or against the
+  other stream's real code once merged.
