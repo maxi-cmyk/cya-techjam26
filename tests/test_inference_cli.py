@@ -43,7 +43,7 @@ class InferenceCliTests(unittest.TestCase):
         Image.new("RGB", (4, 4), (1, 2, 3)).save(self.image_dir / "a.png")
         Image.new("RGB", (4, 4), (4, 5, 6)).save(self.image_dir / "b.jpg")
 
-        result = self._run(str(self.image_dir), "--output-dir", str(self.output_dir))
+        result = self._run(str(self.image_dir), "--output-dir", str(self.output_dir), "--no-checkpoint")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         predictions = json.loads((self.output_dir / "predictions.json").read_text())
@@ -58,7 +58,7 @@ class InferenceCliTests(unittest.TestCase):
     def test_progress_and_summary_lines_are_printed_to_stdout(self) -> None:
         Image.new("RGB", (4, 4)).save(self.image_dir / "a.png")
 
-        result = self._run(str(self.image_dir), "--output-dir", str(self.output_dir))
+        result = self._run(str(self.image_dir), "--output-dir", str(self.output_dir), "--no-checkpoint")
 
         self.assertIn("predicted a.png", result.stdout)
         self.assertIn("discovered=1 predicted=1 invalid=0 exit=0", result.stdout)
@@ -67,7 +67,7 @@ class InferenceCliTests(unittest.TestCase):
         Image.new("RGB", (4, 4)).save(self.image_dir / "good.png")
         (self.image_dir / "bad.png").write_bytes(b"not an image")
 
-        result = self._run(str(self.image_dir), "--output-dir", str(self.output_dir))
+        result = self._run(str(self.image_dir), "--output-dir", str(self.output_dir), "--no-checkpoint")
 
         self.assertEqual(result.returncode, 3, result.stderr)
         predictions = json.loads((self.output_dir / "predictions.json").read_text())
@@ -78,8 +78,22 @@ class InferenceCliTests(unittest.TestCase):
         self.assertEqual(report["errors"][0]["code"], "unsupported_image")
         self.assertNotIn("/", report["errors"][0]["message"])
 
+    def test_missing_default_checkpoint_falls_back_to_stub_with_a_loud_warning(self) -> None:
+        Image.new("RGB", (4, 4)).save(self.image_dir / "a.png")
+
+        result = self._run(
+            str(self.image_dir), "--output-dir", str(self.output_dir),
+            "--checkpoint", str(self.root / "does-not-exist.pt"),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("WARNING", result.stderr)
+        self.assertIn("stub predictor", result.stderr)
+        predictions = json.loads((self.output_dir / "predictions.json").read_text())
+        self.assertEqual(predictions, [{"image_path": "a.png", "pred": 0.5}])
+
     def test_empty_directory_is_fatal_and_publishes_nothing(self) -> None:
-        result = self._run(str(self.image_dir), "--output-dir", str(self.output_dir))
+        result = self._run(str(self.image_dir), "--output-dir", str(self.output_dir), "--no-checkpoint")
 
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertFalse((self.output_dir / "predictions.json").exists())
@@ -87,13 +101,13 @@ class InferenceCliTests(unittest.TestCase):
 
     def test_fatal_run_never_touches_a_prior_successful_run(self) -> None:
         Image.new("RGB", (4, 4)).save(self.image_dir / "a.png")
-        first = self._run(str(self.image_dir), "--output-dir", str(self.output_dir))
+        first = self._run(str(self.image_dir), "--output-dir", str(self.output_dir), "--no-checkpoint")
         self.assertEqual(first.returncode, 0, first.stderr)
         before = (self.output_dir / "predictions.json").read_bytes()
 
         # Remove all images so the second run hits the fatal empty-discovery path.
         (self.image_dir / "a.png").unlink()
-        second = self._run(str(self.image_dir), "--output-dir", str(self.output_dir))
+        second = self._run(str(self.image_dir), "--output-dir", str(self.output_dir), "--no-checkpoint")
 
         self.assertEqual(second.returncode, 1, second.stderr)
         self.assertEqual((self.output_dir / "predictions.json").read_bytes(), before)

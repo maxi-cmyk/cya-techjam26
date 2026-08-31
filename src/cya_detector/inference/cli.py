@@ -17,12 +17,15 @@ from cya_detector.inference.contracts import EXIT_FATAL, Predictor
 from cya_detector.inference.output import publish
 from cya_detector.inference.runner import InferenceRunFailure, run_inference
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_CHECKPOINT_PATH = (
+    REPO_ROOT / "artifacts/robustness/train-controlled-rine/seed_42/best_50_50.pt"
+)
+
 
 def stub_predictor(image: Image.Image) -> float:
-    """Placeholder predictor for the Task 10A skeleton.
-
-    Task 10B replaces this with the calibrated controlled-RINE seed-42
-    adapter; everything else in this pipeline is unaffected by that swap.
+    """Placeholder predictor. Only used when no real checkpoint can be found;
+    ``main`` prints a loud warning to stderr whenever this is what actually ran.
     """
 
     return 0.5
@@ -42,17 +45,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=None,
+        default=DEFAULT_CHECKPOINT_PATH,
         help=(
             "Path to the controlled-RINE seed-42 checkpoint (best_50_50.pt). "
-            "If omitted, uses a placeholder stub predictor that always returns 0.5."
+            f"Defaults to {DEFAULT_CHECKPOINT_PATH} if present. Pass --no-checkpoint "
+            "explicitly to force the placeholder stub predictor (always 0.5)."
         ),
+    )
+    parser.add_argument(
+        "--no-checkpoint",
+        action="store_true",
+        help="Force the placeholder stub predictor even if the default checkpoint exists.",
     )
     parser.add_argument(
         "--device",
         default="cpu",
         choices=("cpu", "cuda"),
-        help="Device for the real predictor (ignored when --checkpoint is omitted).",
+        help="Device for the real predictor (ignored when running the stub).",
     )
     return parser
 
@@ -62,11 +71,20 @@ def main(argv: list[str] | None = None, *, predict_probability: Predictor | None
     args = parser.parse_args(argv)
 
     if predict_probability is None:
-        if args.checkpoint is not None:
+        if args.no_checkpoint:
+            predict_probability = stub_predictor
+        elif args.checkpoint.is_file():
             from cya_detector.inference.rine_predictor import RinePredictor
 
             predict_probability = RinePredictor(checkpoint_path=args.checkpoint, device=args.device)
         else:
+            print(
+                f"WARNING: no checkpoint found at {args.checkpoint} — falling back to the "
+                "placeholder stub predictor. Every 'pred' in the output is a meaningless "
+                "constant 0.5, not a real score. Pass --checkpoint to point at the real "
+                "controlled-RINE seed-42 checkpoint.",
+                file=sys.stderr,
+            )
             predict_probability = stub_predictor
 
     def progress(line: str) -> None:
