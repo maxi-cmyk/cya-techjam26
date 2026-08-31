@@ -53,10 +53,20 @@ Use the official public folders:
 - [Accessible PREMIER Google Drive folder](https://drive.google.com/drive/folders/1Fb1ayRJnHGGdUI2TGfzZGQ9MRXh8a6Rj)
 - [GenImage Google Drive folder](https://drive.google.com/drive/folders/1jGt10bwTbhEZuGXLyvrCuxOI0cBqQ1FS?usp=sharing)
 
-Because the shared hackathon Drive is read-only, download the selected archives
-through the browser and upload/extract them directly into the Colab runtime. A
-personal Drive folder is optional; the original shared Drive never needs to be
-modified. The accessible PREMIER folder was manually checked on 2026-08-30 and
+The prepared Task 8B transport lives in the writable hackathon data folder
+[`task8b`](https://drive.google.com/drive/folders/1ANvP41AjiTztc0Hhv3rT-XjKguG0YNUp).
+Its canonical payload is the ordered set
+`task8b_manifest.tar.gz.upload-aa` through
+`task8b_manifest.tar.gz.upload-aw`: 23 chunks totalling 2,135,569,689 bytes.
+Together they reconstruct a SHA-256-locked archive containing `sources.csv` and
+exactly the 1,280 licensed inventory images. The Drive `premier/N1` and
+`premier/N2` directory placeholders do not need to contain individual images;
+`06_task8b_native_physical.ipynb` downloads, verifies, combines, and safely
+extracts the chunks into `/content/hackathon_data/raw/task8b`. It then verifies
+all inventory paths and refuses to continue if either local PREMIER split is
+empty.
+
+The accessible PREMIER source folder was manually checked on 2026-08-30 and
 does not contain N3, even though the project page describes that subset. Prepare
 N1 and N2 now; N3 is not required and may be added later only if it becomes
 publicly accessible under the documented license. For GenImage, acquire each
@@ -143,9 +153,6 @@ and at least 500 usable files per class. The default inventory cap is 830 images
 per generator and class counts are balanced automatically.
 
 Task 8B reuses the existing data and artifact roots from `configs/colab.json`.
-No additional shared Drive root is introduced.
-
-Task 8B reuses the existing data and artifact roots from `configs/colab.json`.
 No additional Drive root is introduced.
 
 ```text
@@ -161,16 +168,19 @@ No additional Drive root is introduced.
     ├── checkpoints/
     └── reports/
 
-/content/drive/MyDrive/cya-techjam26/artifacts/
-└── task8b/                        optional durable result copy
+Google Drive artifacts root (ID 1uv0sa041-6N-Vg8tdtb5in0GgWBR-SFz)
+└── task8b/                        durable API-synced result copy
 
 /content/drive/MyDrive/cya-techjam26-data/
 └── raw/task8b/                    optional personal source copy
 ```
 
 Raw images stay under `hackathon_data`. Manifests, reports, features,
-fingerprints, and checkpoints stay under `artifacts/task8b`. Both roots are
-already ignored by Git.
+fingerprints, and checkpoints stay under `artifacts/task8b`. Both local roots
+are ignored by Git. The notebook syncs durable Task 8B outputs directly through
+the authenticated Drive API; mounting My Drive is optional. The reproducible
+`matched_views/images` cache stays local rather than creating more than one
+thousand Drive files.
 
 ## Curated inventory contract
 
@@ -225,6 +235,90 @@ the existing single-image proxy reaches AUC 0.543. Both miss the predeclared
 0.60 gate. CA coverage is zero. The final decision is therefore no physical
 feature retained and no fusion training.
 
+### Bounded PRNU v2 follow-up
+
+The original evidence above remains immutable. A separately versioned follow-up
+tests whether a stronger estimator can recover repeatable device signal from the
+same licensed PREMIER source rows. It writes only to `artifacts/task8b_v2` and
+does not overwrite `artifacts/task8b`.
+
+The predeclared v2 protocol uses:
+
+- 25 disjoint reference images per eligible seed-training device, leaving every
+  remaining image from that device as a query;
+- a fixed 512 px centre crop in encoded sensor coordinates, with no resize and
+  no EXIF orientation transform;
+- BayesShrink `db2` wavelet residual extraction, row/column zero-meaning, and
+  adaptive Fourier-domain spectral cleanup;
+- dark, saturated, and highest-gradient pixel masking;
+- multiplicative reference estimation and PCE comparison with at most eight
+  pixels of translational registration; and
+- the unchanged AUC 0.60 gate, plus same-device mean PCE above different-device
+  mean PCE and top-1 device accuracy above random.
+
+The experiment assumes that encoded pixel coordinates are stable within each
+PREMIER device ID and that the files retain enough native sensor signal for a
+512 px crop. It uses device identity only, does not read binary authenticity
+labels, does not read selection or held-out splits, and cannot establish camera
+authentication. Passing the device-signal gate would permit a later locked
+binary usefulness ablation; it would not automatically retain PRNU for fusion.
+
+The verified local run includes all ten eligible devices, 250 reference images,
+166 disjoint queries, and 1,660 comparisons. It reaches AUC 0.9171 and top-1
+device accuracy 0.8554 versus 0.10 random. Mean same-device PCE is 262.65 versus
+11.31 for different-device comparisons, so all three predeclared device-signal
+conditions pass. No authentic/AI labels, selection/held-out rows, or binary
+fusion training were used. The next permissible step is a separately locked
+binary usefulness ablation, not automatic feature retention. That ablation is
+now complete and rejected as recorded below.
+
+The first binary handoff audit subsequently showed that none of its received
+images supported that 512 px crop. That result is retained as a protocol-mismatch
+audit, not as a PRNU rejection. The improved estimator was therefore rerun in a
+separately versioned label-free PREMIER validation at a fixed 256 px native
+crop. It passed with AUC 0.8593, top-1 device accuracy 0.6566 versus 0.10 random,
+and mean same/different-device PCE 73.27/11.25. The 512 px report and fingerprints
+remain archived separately and were not used to authorize the 256 px result.
+
+That binary workflow is implemented separately in
+`notebooks/08_prnu_v2_binary.ipynb`. It does not expose enrolled-device
+fingerprints or PCE scores to the classifier. Instead, it derives a fixed
+single-image vector from the same wavelet/spectral residual pipeline: residual
+energy and distribution, spectral flatness/bands, row/column and CFA
+periodicity, luminance coupling, block energy/consistency, and support masks.
+Eligibility is based only on whether each matched-clean received image supports
+a native-coordinate 256 px crop; no row is resized into eligibility. Before
+training, every matched-clean split/label group must reach 95% support and the
+label gap must be at most five points. Independently downscaled robustness views
+remain evaluation rows: when they are too small, their PRNU values are zero and
+their eligibility, validity, and confidence masks state that explicitly. The
+experiment then compares PRNU-only and RINE+PRNU
+across seeds 42/43/44 and every independent robustness cell. This is a forensic
+binary diagnostic, not camera identification or authentication.
+
+The completed runtime extraction covers all 20,850 development rows with zero
+read or extraction failures; every matched-clean split/label group has 100%
+eligibility. PRNU-only reaches 85.25% mean clean accuracy, 70.92% mean
+robustness accuracy, and a 78.09% locked score. RINE+PRNU is rejected: its mean
+locked score is 33.43% versus 99.81% for controlled RINE because seeds 42 and
+43 collapse to 0.32% and 0.43%. Seed 44 reaches 99.55% but still does not improve
+its parent. No PRNU feature is retained and the competition `final_test` remains
+unread.
+
+Run it after the original Task 8B manifest exists:
+
+```bash
+make task8b-v2-prnu-validate PRNU_V2_CROP_SIZE=256
+```
+
+The report is written to
+`artifacts/task8b_v2/audits/prnu_v2_signal_validation.json`, with a size-specific
+copy at `prnu_v2_signal_validation_256.json`; per-device
+fingerprints are written below
+`artifacts/task8b_v2/fingerprints/crop_256`. The notebook syncs that complete
+directory into a sibling `task8b_v2` folder under the same
+Google Drive artifact root.
+
 ## Split and leakage contract
 
 - Authentic rows group by complete physical device ID. Variable EXIF model
@@ -265,6 +359,7 @@ make task8b-prnu-references
 make task8b-matched
 make task8b-prnu-validate
 make task8b-decision
+make task8b-v2-prnu-validate
 ```
 
 `task8b-prepare` builds the split manifest and requires the source-readiness audit
@@ -272,11 +367,11 @@ to pass. Its report distinguishes `source_ready`, `prnu_reference.ready`,
 `chromatic_aberration.ready`, and `training_ready`. The second command reruns the
 source gate and then builds training-only reference fingerprints. The remaining
 commands materialize and audit the matched view, validate PRNU without binary
-labels, and record the fail-closed retain/reject decision. Copy
-the completed `artifacts/task8b` directory to the configured
-`drive_artifact_root` for durable storage.
+labels, and record the fail-closed retain/reject decision. The final notebook
+cell upserts the durable result directories into the existing Google Drive
+artifacts root for persistent storage.
 
-None of these commands downloads third-party data or uploads results automatically.
+None of these Make commands downloads third-party data or uploads results automatically.
 The thin Colab launcher
 [`06_task8b_native_physical.ipynb`](../../notebooks/06_task8b_native_physical.ipynb)
 performs local staging, runs these gates, and syncs completed Task 8B artifacts

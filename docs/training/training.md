@@ -33,7 +33,7 @@ The architecture is trainable, but the word **parameter** must be used carefully
 | RINE-style layer fusion | Layer-importance estimator and binary head | Binary authentic/AI labels | **Trainable** with CLIP frozen |
 | Texture path | Patch aggregation/attention and fusion weights | Binary labels on clean and independently transformed views | **Trainable**, but patch selection itself is deterministic and patch count/size are validation hyperparameters |
 | Frequency path | Feature projection, fusion weights, and an optional frequency-only classifier | Binary labels plus generator/decoder metadata for stratified validation | **Trainable as an auxiliary path**; FFT/DCT and residual statistics themselves have no learned weights |
-| PRNU-coherence path | Feature projection and fusion weights | Binary labels only | **Trainable only as classification fusion**; the current data cannot train or verify a camera fingerprint without device IDs and multi-image camera references |
+| Reference-free PRNU-v2 path | Feature projection and fusion weights | Binary labels on clean and independent-transform rows | **Completed and rejected**: 78.09% PRNU-only locked score; RINE+PRNU 33.43% mean versus 99.81% parent after two-seed collapse; known-device fingerprints/PCE remain separate evidence and never become classifier inputs |
 | RGB/Lab correlation path | Feature projection and fusion weights | Binary labels on matched jitter distributions | **Trainable as fusion**; channel-correlation extraction remains deterministic |
 | Chromatic-aberration/radial-distortion path | Feature projection and fusion weights | Binary labels and extractor confidence, but no lens/camera calibration ground truth | **Trainable as fusion only**; the optical fit must remain deterministic or be validated on a separate calibrated dataset |
 | Stage 1 early exit | Frequency-only scorer and a fixed threshold selected on validation | Binary labels, held-out generator strata, and independent transforms | **Possible but disabled by default** until the precision/coverage gate passes |
@@ -239,7 +239,7 @@ Do not add undocumented random image augmentations. Horizontal flips, random cro
 Deterministic auxiliary features may be cached to reduce training cost:
 
 - frequency feature bank;
-- PRNU-coherence vector;
+- reference-free PRNU-v2 vector and support masks;
 - RGB/Lab correlation vector;
 - chromatic-aberration and optional radial-distortion vector;
 - validity, confidence, and coverage masks;
@@ -269,7 +269,7 @@ The mandatory Stage 2 baseline receives global and patch CLIP representations fr
 - global frozen CLIP representation;
 - aggregated texture-patch representation;
 - family-aware frequency vector;
-- PRNU-coherence vector;
+- reference-free PRNU-v2 vector and support masks;
 - RGB/Lab correlation vector;
 - chromatic-aberration and eligible radial-distortion vector;
 - validity/confidence masks for every auxiliary family.

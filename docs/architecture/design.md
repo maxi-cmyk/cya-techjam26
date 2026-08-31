@@ -8,7 +8,7 @@ This document describes the shipped inference pipeline and the offline evaluatio
 2. **One transform per test image.** Every robustness variant is generated directly from its clean source with exactly one transformation and one parameter setting. A transformed output is never used as input to another transformation.
 3. **One-directional shortcuts.** A fast path may shortcut toward `ai_generated`, never toward `authentic`. Missing forensic evidence does not prove authenticity, especially after transformations erase artifacts.
 4. **Single live backbone.** Models may be compared offline, but only one backbone is loaded while scoring a test directory.
-5. **PRNU is auxiliary evidence.** A single-image PRNU-coherence proxy may support the backbone, but it is not a verified camera fingerprint and can never make a standalone verdict.
+5. **PRNU is rejected diagnostic evidence.** The reference-free single-image PRNU-v2 residual vector failed its locked fusion ablation and is disabled; it is not a verified camera fingerprint and can never make a standalone verdict.
 6. **Texture is learned, not thresholded.** Fine-detail regions inform a lightweight learned head; rules such as “smooth equals AI” are prohibited because transformations can make authentic images equally smooth.
 7. **Color and optics require confidence.** Deterministic color-correlation and optical-fit features run inline, but absent or weak physical-camera cues are neutral rather than proof of synthesis.
 8. **Frequency signatures are family-dependent.** Stage 1 measures multiple spectral and neighborhood-pixel cues and is evaluated by generator/decoder family; it does not assume one GAN/diffusion/autoregressive fingerprint.
@@ -26,7 +26,7 @@ Stage 0 — C2PA provenance check
                     |
                     v
 Decode received view once
-    |-- frequency/PRNU/color/optics features
+    |-- disabled frequency/PRNU/color/optics diagnostics
     |-- global CLIP view
     `-- detail-rich crops selected before global model-size conversion
                     |
@@ -38,10 +38,7 @@ Stage 1 — family-aware frequency feature bank on received view
                     v
 Stage 2 — single frozen CLIP-ViT backbone
           + binary classification head
-          + soft patch aggregation
-          + texture-aware local-detail head
-          + PRNU-coherence auxiliary features
-          + color-correlation and optical-aberration features
+          + candidate soft patch aggregation/local-detail head (Task 9)
           + temperature scaling
                     |
                     v
@@ -74,7 +71,7 @@ JPEG compression, blur, resize, and deliberate spectral correction can hide or a
 
 ### Stage 2 — Main model
 
-Most inputs pass through a frozen CLIP-ViT backbone with a lightweight binary head. Every runtime feature is extracted from the exact received view; matched JPEG normalization is offline dataset construction and is never rerun here. A global semantic view is combined with local crops selected before global model-size conversion. Frequency, PRNU, color-correlation, and optical-aberration features are fused only with validity and confidence masks. Temperature scaling converts the output into a calibrated `P(ai_generated)`.
+Most inputs pass through a frozen CLIP-ViT backbone with a lightweight binary head. Every runtime feature is extracted from the exact received view; matched JPEG normalization is offline dataset construction and is never rerun here. A global semantic view is combined with local crops selected before global model-size conversion. Frequency, PRNU, color-correlation, and optical-aberration branches remain offline diagnostics unless a locked ablation retains them; PRNU-v2 is rejected for the current handoff. Temperature scaling converts the selected model output into a calibrated `P(ai_generated)`.
 
 Offline comparisons may use `source_original` to measure native-forensics behavior, but the shipped model cannot depend on that unavailable view. The mandatory runtime comparisons are global-only CLIP, local-crop-only representation, global-plus-local CLIP, and received-view auxiliary fusion.
 
@@ -85,7 +82,7 @@ The texture path preserves local evidence that can disappear when an entire high
 1. Compute a cheap multi-scale Laplacian/Sobel energy map on the received image at its available resolution, before global CLIP conversion.
 2. Select a small, fixed number of non-overlapping texture-rich patches across the image, while retaining the global view for context; do not rely on one center crop.
 3. Pad patches when necessary, encode them with the same live backbone or a small shared patch head, and aggregate them with soft attention.
-4. Fuse the resulting texture vector with global CLIP, frequency, and PRNU features in the binary head.
+4. Compare the resulting texture vector with global CLIP under the locked gate; do not combine it with rejected frequency or PRNU features.
 
 Energy selects where to look, not what verdict to produce. The head learns structural differences from labeled data. Raw sharpness, smoothness, edge density, LBP, GLCM, or OCR confidence must not be used as fixed authenticity thresholds.
 
@@ -97,18 +94,18 @@ Text/OCR is a stretch ablation only. If a text region is detected, structural OC
 
 Inference-time “degradation curves” are out of scope. Applying new blur or JPEG operations to an input that may already be transformed would create chained transformations, violate the independent-test protocol, and multiply inference cost.
 
-### PRNU auxiliary path
+### Rejected PRNU diagnostic path
 
 Photo-response non-uniformity (PRNU) is a weak, multiplicative sensor pattern introduced during physical capture. A fully synthetic image has no true camera-sensor PRNU, although a generator or later processing can synthesize noise that resembles it.
 
-For each input image, the auxiliary path:
+For each evaluated image, the diagnostic path:
 
 1. denoises the image and computes the residual `W = image - denoised_image`;
-2. divides the residual and luminance image into aligned blocks;
-3. measures residual energy, the relationship between residual strength and local irradiance, cross-patch self-consistency, and candidate CFA/sensor periodicity;
-4. produces a small normalized feature vector and a scalar `prnu_coherence` diagnostic for fusion with CLIP features.
+2. uses a native-coordinate 256 px crop when supported, without resize or EXIF transposition;
+3. measures residual energy/distribution, spectral bands and flatness, irradiance coupling, block consistency, and candidate CFA/sensor periodicity; and
+4. produces a small normalized feature vector plus eligibility, validity, and confidence masks for the completed RINE-fusion ablation.
 
-This is deliberately called **PRNU coherence**, not camera identification. Classical device-level PRNU verification needs a reference fingerprint estimated from multiple images from the same sensor. With one unknown image, the system can only test whether its residual looks physically sensor-like. Low coherence can result from either synthesis or ordinary redistribution, so it cannot independently imply `ai_generated`; high coherence can also be simulated and cannot independently prove `authentic`.
+This is deliberately reference-free and is not camera identification. The AUC 0.859 Task 8B-v2 experiment validates the underlying residual estimator at the compatible 256 px crop only in a separate known-device setting; its fingerprints and PCE scores are unavailable to runtime classification. The completed fusion ablation rejects the runtime feature after a 33.43% mean locked score and two-seed collapse. Weak residual evidence cannot independently imply `ai_generated`, and strong sensor-like noise cannot independently prove `authentic`.
 
 DSNU is not implemented. Reliable dark-signal isolation normally needs dark-frame/reference calibration, and fixed-pattern-noise correction can suppress the signal. A single exported image therefore does not provide a dependable DSNU estimate.
 

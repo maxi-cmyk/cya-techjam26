@@ -68,15 +68,15 @@ The binary head is the only classification head. Face-, edit-, and mixed-content
 - **Rejected test-time method:** do not apply extra blur/JPEG/resize passes to estimate a degradation curve; this chains transformations and increases inference cost.
 - **Retention gate:** keep the head only if locked ablations improve the 50/50 score or an agreed robustness diagnostic without unacceptable R.Acc./F.Acc. regression.
 
-### PRNU-coherence extractor
+### Reference-free PRNU-v2 extractor
 
 - **Signal:** photo-response non-uniformity, modeled as a weak multiplicative sensor pattern in the denoising residual.
-- **Candidate implementation:** wavelet or established PRNU-style denoising, residual extraction, block-wise NumPy/scikit-image analysis, and normalized feature fusion in PyTorch.
-- **Features:** residual variance/energy, local luminance-to-residual coupling, cross-patch self-consistency, and CFA/sensor-periodicity statistics.
-- **Boundary:** this is a single-image coherence proxy. Classical normalized correlation against a camera fingerprint is unavailable because the source device and reference image set are unknown.
+- **Evaluated implementation:** the validated wavelet/spectral residual cleanup, native-coordinate 256 px crop without resize, deterministic NumPy/scikit-image summaries, and normalized feature fusion in PyTorch.
+- **Features:** residual energy/distribution, spectral flatness and bands, local luminance coupling, block consistency, CFA/sensor periodicity, and eligibility/validity/confidence masks.
+- **Runtime boundary:** runtime is strictly single-image and reference-free. Task 8B-v2 separately validates repeatable device signal at 256 px using known-device fingerprints and PCE (AUC 0.859), but those identities, fingerprints, and scores never enter the binary classifier.
 - **Decision rule:** no direct decision rule. The feature vector is learned jointly with CLIP features, and missing/weak PRNU never independently triggers a synthetic verdict.
 - **Robustness expectation:** crop should preserve the signal best; JPEG, blur, resize, and Gaussian noise are expected to weaken it substantially. Each claim must be checked in the independent transformation table.
-- **Ablation gate:** retain PRNU fusion only if it improves the locked 50/50 score or a pre-agreed class-specific robustness measure without causing unacceptable regression.
+- **Ablation result:** reject PRNU fusion. It scores 33.43% locked versus 99.81% for controlled RINE and collapses in two of three seeds; keep the extractor diagnostic-only.
 - **DSNU:** considered but not implemented because reliable isolation normally needs dark-frame/reference calibration, while correction can suppress the residual before export. One unknown image supplies neither a reference nor a dependable estimate.
 
 ### Inter-channel color correlation
@@ -155,7 +155,7 @@ For color jitter, both labels use the same brightness/contrast/saturation parame
 - **Accuracy component (50%):** binary accuracy on clean images.
 - **Robustness component (50%):** mean binary accuracy across every independent transform-and-parameter set.
 - **Required diagnostics:** R.Acc., F.Acc., binary confusion matrix, and ECE for clean data and each transformation row.
-- **PRNU diagnostics:** PRNU-only, CLIP-only, and fused accuracy plus `prnu_coherence` distributions for clean and independent transform rows.
+- **PRNU diagnostics:** PRNU-only, RINE-only, and fused accuracy plus reference-free PRNU-v2 feature/support distributions for clean and independent transform rows.
 - **Texture diagnostics:** texture-only, CLIP + texture, CLIP + PRNU, and full-fusion accuracy; report R.Acc./F.Acc. and overlap with frequency/PRNU signals.
 - **Color/optics diagnostics:** RGB-only, Lab-only, chromatic-aberration-only, eligible radial-distortion-only, incremental fusion results, and fit validity/coverage for every transform row.
 - **Frequency diagnostics:** frequency-only R.Acc./F.Acc., per-family/checkpoint recall, candidate fast-track precision/coverage, and degradation for every independent transform row.

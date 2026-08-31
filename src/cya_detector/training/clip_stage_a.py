@@ -206,6 +206,47 @@ def _save_checkpoint(path: Path, *, head: Any, state: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def predict_linear_probe_checkpoint(
+    *,
+    checkpoint_path: Path,
+    rows: list[CachedEmbedding],
+    seed: int,
+    matching_policy: str,
+    device: str,
+) -> tuple[list[PredictionRecord], dict[str, Any]]:
+    """Load one Stage A head and score a clean-plus-transform embedding bank."""
+
+    torch, _, _ = require_ml_dependencies()
+    if not rows:
+        raise ValueError("Stage A checkpoint evaluation requires embedding rows")
+    embeddings, _ = load_cached_tensors(rows)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    state = checkpoint.get("head_state_dict")
+    if not isinstance(state, dict):
+        raise ValueError(f"Stage A checkpoint has no head_state_dict: {checkpoint_path}")
+    hidden_dimension = checkpoint.get("hidden_dimension")
+    head = build_binary_head(
+        embeddings.shape[1],
+        hidden_dimension=hidden_dimension,
+    ).to(device)
+    head.load_state_dict(state, strict=True)
+    predictions = _predictions(
+        head=head,
+        embeddings=embeddings,
+        rows=rows,
+        checkpoint=str(checkpoint_path.resolve()),
+        seed=seed,
+        matching_policy=matching_policy,
+        device=device,
+    )
+    metadata = {
+        key: value
+        for key, value in checkpoint.items()
+        if key != "head_state_dict"
+    }
+    return predictions, metadata
+
+
 def train_linear_probe(
     *,
     train_rows: list[CachedEmbedding],

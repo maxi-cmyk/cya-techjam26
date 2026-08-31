@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract deterministic Stage C auxiliary features."""
+"""Extract reference-free PRNU-v2 features for the locked robustness bank."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from cya_detector.config import load_config  # noqa: E402
-from cya_detector.training.auxiliary_stage_c import extract_auxiliary_manifest  # noqa: E402
+from cya_detector.training.prnu_runtime_v2 import extract_prnu_runtime_manifest  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
@@ -26,22 +26,18 @@ def main() -> int:
     parser.add_argument("--matching-policy", default="fixed_q96")
     parser.add_argument("--config", type=Path, default=Path("configs/colab.json"))
     parser.add_argument("--workers", type=int)
-    parser.add_argument(
-        "--families",
-        default="color,prnu,optics",
-        help="Comma-separated extractor groups: color,prnu,optics",
-    )
+    parser.add_argument("--allow-not-ready", action="store_true")
     args = parser.parse_args()
-    config = load_config(args.config)
-    report = extract_auxiliary_manifest(
+    config = load_config(args.config)["prnu_v2_runtime"]
+    report = extract_prnu_runtime_manifest(
         manifest_path=args.manifest,
         output_path=args.output,
         report_path=args.report,
         cache_root=args.cache_root,
         matching_policy=args.matching_policy,
-        configuration=config["auxiliary"],
-        workers=args.workers or config["auxiliary"]["workers"],
-        families=tuple(value.strip() for value in args.families.split(",") if value.strip()),
+        configuration=config,
+        workers=args.workers or config["workers"],
+        require_ready=not args.allow_not_ready,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
