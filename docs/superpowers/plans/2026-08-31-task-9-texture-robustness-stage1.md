@@ -179,7 +179,8 @@ Use a fake encoder and tiny real checkpoints. Assert transformed patch boxes dif
 def test_evaluates_all_81_slices_with_shared_transformed_features(self):
     summary = evaluate_texture_stage1(**self.evaluation_args)
     self.assertEqual(summary["completed_slices"], 81)
-    self.assertEqual(self.fake_encoder.encoded_image_count, self.transformed_row_count * 5)
+    expected_views = sum(1 + row.available_patch_count for row in self.expected_rows)
+    self.assertEqual(self.fake_encoder.encoded_image_count, expected_views)
 
 def test_never_reuses_clean_patch_coordinates(self):
     evaluate_texture_stage1(**self.evaluation_args)
