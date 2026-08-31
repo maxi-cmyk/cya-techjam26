@@ -362,6 +362,16 @@ Tests: `tests/test_c2pa_inference.py`, `tests/test_directory_inference.py`
   `checkpoint_disk_footprint()` reports on-disk checkpoint size. Both are
   model-agnostic and tested against fixtures; not yet run against the real
   checkpoint on the target Colab GPU.
-- **Not started:** running the sealed `final_test` once everything above is
-  frozen (needs separate explicit approval regardless of readiness), and any
-  optional post-baseline experiment.
+- **`final_test`: built and tested, not yet run.**
+  `src/cya_detector/evaluation/final_test.py`'s `evaluate_final_test` is the
+  only code in the repository permitted to read `final_test` rows — every
+  other loader deliberately refuses them. It requires an explicit
+  `confirm_final_test_read=True`, hash-verifies every image before scoring
+  it, and refuses outright (no resume, no overwrite) if a prior result
+  already exists. `scripts/run_final_test.py` additionally gates behind
+  `--i-understand-this-is-irreversible`, and `notebooks/11_final_test.ipynb`
+  is the thin Colab launcher. Not yet run: the real `final_test` images live
+  in a 245MB Drive archive impractical to pull through a chat-based
+  connector — this has to run on Colab, where Drive/GPU access already
+  works.
+- **Not started:** any optional post-baseline experiment.
