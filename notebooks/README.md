@@ -51,7 +51,7 @@ the existing Drive artifact root. It stops before model fitting whenever source,
 nuisance, or physical-estimator validation fails. The current licensed pilot
 finishes with no physical feature retained.
 
-`07_texture_stage_d.ipynb` runs after Task 2's fixed-Q96 pilot manifest exists.
+`09_texture_stage_d.ipynb` runs after Task 2's fixed-Q96 pilot manifest exists.
 It is a thin launcher only: every cell calls `scripts/extract_texture_features.py`,
 `scripts/train_texture_pilot.py`, or `scripts/compare_texture_pilot.py` (the same
 `task9-*` Make targets), and no model or training code is inlined in the notebook
@@ -75,9 +75,38 @@ runs finish, it applies the deterministic clean gate. A
 specified Task 3 robustness continuation — it does not retain Task 9 by itself.
 A verified Colab run reached 100% `global_local` clean selection accuracy for
 all three seeds versus a 99.394% `global_only` mean, corrected one global error
-per seed, introduced none, and emitted `continue_to_robustness_design`. The
-separately specified Stage-1 robustness continuation remains pending; this
+per seed, introduced none, and emitted `continue_to_robustness_design`. This
 clean result does not retain Task 9 by itself, and `final_test` remains unread.
+
+`10_texture_robustness_stage1.ipynb` implements the frozen-checkpoint Stage-1
+robustness continuation specified in
+[`docs/superpowers/specs/2026-08-31-task-9-texture-robustness-stage1-design.md`](../docs/superpowers/specs/2026-08-31-task-9-texture-robustness-stage1-design.md).
+It is a thin launcher only: every cell calls `scripts/materialize_texture_robustness.py`,
+`scripts/evaluate_texture_robustness.py`, or `scripts/compare_texture_robustness.py`
+(the same `task9-robustness-*` Make targets); no transform, model, inference,
+metric, or gate logic is inlined in the notebook. It materializes the nine
+texture-sensitive Task 3 cells (`jpeg_q90`/`q70`/`q50`/`q30`,
+`blur_sigma_0.5`/`1.0`/`2.0`, `resize_scale_0.5`/`0.25`) directly from the
+fixed-Q96 matched-clean `selection_val` parents, extracts each transformed
+image's global/patch representation once and reuses it across every
+variant/seed slice, evaluates the nine existing immutable best-clean
+checkpoints without any training or recalibration, restores and hash-verifies
+the three retained per-seed controlled-RINE `best_50_50.pt`/
+`best_50_50_predictions.csv` artifacts, recomputes their nine-cell subset from
+persisted per-sample predictions rather than substituting the retained
+14-cell `0.9981` aggregate, and gates `global_local` against both
+`global_only` and controlled RINE with the locked score, aggregate
+class-tolerance, and per-cell worst-case conditions. Large transformed images
+and feature caches stay under `/content`; durable predictions and reports are
+copied to
+`My Drive/cya-techjam26/artifacts/task9/clean_pilot_v1/robustness_stage1_v1`
+only after materialization, evaluation, and comparison each complete, so a
+fresh runtime can resume verified work without ever treating a partially
+copied Drive directory as complete. The real Colab Stage-1 run and its
+`retain_texture_for_full_robustness`/`reject_texture_robustness_stage1`
+decision remain pending; a pass authorizes only the remaining Task 3
+noise/color-jitter/crop cells, never final retention or `final_test`.
+
 The later workflow runs the bounded
 native-coordinate PRNU v2 estimator. Original evidence is synced to
 `artifacts/task8b`; v2 reports and fingerprints are synced to the sibling

@@ -31,7 +31,7 @@ from cya_detector.training.texture_stage_d import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "configs/colab.json"
 MAKEFILE_PATH = REPO_ROOT / "Makefile"
-NOTEBOOK_PATH = REPO_ROOT / "notebooks/07_texture_stage_d.ipynb"
+NOTEBOOK_PATH = REPO_ROOT / "notebooks/09_texture_stage_d.ipynb"
 
 _MAKE_TARGET_PATTERN = re.compile(
     r"^(?P<name>[A-Za-z0-9_.-]+)\s*:(?!=)(?P<deps>[^\n]*)\n(?P<recipe>(?:\t[^\n]*\n?)*)",

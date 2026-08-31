@@ -1,4 +1,4 @@
-.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare task8b-extract-genimage task8b-inventory task8b-manifest task8b-readiness task8b-matched task8b-prepare task8b-prnu-references task8b-prnu-validate task8b-decision task8b-v2-prnu-validate robustness-test robustness-prepare robustness-stage-a-evaluate robustness-rine-evaluate robustness-rine-train robustness-frequency-extract robustness-lab-extract robustness-fusion-train robustness-prnu-v2-extract robustness-prnu-v2-train robustness-prnu-v2-fusion robustness-prnu-v2-compare task9-test task9-extract task9-run task9-matrix task9-compare
+.PHONY: install install-colab install-dev smoke smoke-bootstrap test task2-source-audit task2-split task2-nuisance-source task2-pilot-fixed task2-pilot-uniform task2-pilots task3-test task3-fixture task4-stage-a-fixed task4-stage-a-uniform task4-stage-a-pilots task4-compare task5-evaluate task6-rine task6-compare task7-extract task7-train task7-compare task8-extract task8-train task8-compare task8b-extract-genimage task8b-inventory task8b-manifest task8b-readiness task8b-matched task8b-prepare task8b-prnu-references task8b-prnu-validate task8b-decision task8b-v2-prnu-validate robustness-test robustness-prepare robustness-stage-a-evaluate robustness-rine-evaluate robustness-rine-train robustness-frequency-extract robustness-lab-extract robustness-fusion-train robustness-prnu-v2-extract robustness-prnu-v2-train robustness-prnu-v2-fusion robustness-prnu-v2-compare task9-test task9-extract task9-run task9-matrix task9-compare task9-robustness-test task9-robustness-materialize task9-robustness-evaluate task9-robustness-compare
 
 DATA_ROOT ?= /content/hackathon_data
 ARTIFACT_ROOT ?= artifacts
@@ -221,3 +221,31 @@ task9-matrix: task9-extract
 # Only meaningful after all nine task9-matrix runs have completed.
 task9-compare:
 	python scripts/compare_texture_pilot.py --output-root $(TASK9_OUTPUT_ROOT)
+
+TASK9_ROBUSTNESS_INPUT_MANIFEST ?= $(TASK9_MANIFEST)
+TASK9_ROBUSTNESS_IMAGE_ROOT ?= /content/task9_robustness_stage1/images
+TASK9_ROBUSTNESS_OUTPUT_ROOT ?= $(ARTIFACT_ROOT)/task9/clean_pilot_v1/robustness_stage1_v1
+TASK9_ROBUSTNESS_MANIFEST ?= $(TASK9_ROBUSTNESS_OUTPUT_ROOT)/materialization/transformed_selection_val.csv
+TASK9_ROBUSTNESS_REPORT ?= $(TASK9_ROBUSTNESS_OUTPUT_ROOT)/materialization/materialization_report.json
+TASK9_ROBUSTNESS_CACHE_ROOT ?= /content/task9_robustness_stage1/cache
+TASK9_ROBUSTNESS_PREDICTIONS_ROOT ?= $(TASK9_ROBUSTNESS_OUTPUT_ROOT)/predictions
+TASK9_ROBUSTNESS_CLEAN_ROOT ?= $(TASK9_OUTPUT_ROOT)/clean_pilot_v1
+TASK9_ROBUSTNESS_CONTROLLED_RINE_ROOT ?= $(ROBUSTNESS_ROOT)/train-controlled-rine
+TASK9_ROBUSTNESS_DEVICE ?= cpu
+
+task9-robustness-test:
+	PYTHONPATH=src python -m unittest tests.test_texture_robustness -v
+
+task9-robustness-materialize:
+	python scripts/materialize_texture_robustness.py --input-manifest $(TASK9_ROBUSTNESS_INPUT_MANIFEST) --output-root $(TASK9_ROBUSTNESS_IMAGE_ROOT) --output-manifest $(TASK9_ROBUSTNESS_MANIFEST) --report $(TASK9_ROBUSTNESS_REPORT)
+
+# Only meaningful after task9-robustness-materialize and all nine clean
+# task9-matrix runs have completed.
+task9-robustness-evaluate:
+	python scripts/evaluate_texture_robustness.py --transformed-manifest $(TASK9_ROBUSTNESS_MANIFEST) --materialization-report $(TASK9_ROBUSTNESS_REPORT) --clean-experiment-root $(TASK9_ROBUSTNESS_CLEAN_ROOT) --cache-root $(TASK9_ROBUSTNESS_CACHE_ROOT) --output-root $(TASK9_ROBUSTNESS_PREDICTIONS_ROOT) --device $(TASK9_ROBUSTNESS_DEVICE)
+
+# Only meaningful after task9-robustness-evaluate has produced all 81
+# prediction slices and the retained controlled-RINE artifacts are restored
+# under TASK9_ROBUSTNESS_CONTROLLED_RINE_ROOT.
+task9-robustness-compare:
+	python scripts/compare_texture_robustness.py --clean-experiment-root $(TASK9_ROBUSTNESS_CLEAN_ROOT) --robustness-root $(TASK9_ROBUSTNESS_PREDICTIONS_ROOT) --controlled-rine-root $(TASK9_ROBUSTNESS_CONTROLLED_RINE_ROOT) --output-root $(TASK9_ROBUSTNESS_OUTPUT_ROOT)

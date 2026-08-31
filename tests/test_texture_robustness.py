@@ -36,8 +36,11 @@ from cya_detector.models.texture import build_texture_head
 from cya_detector.models.clip_baseline import LoadedClip
 from cya_detector.features.texture import prepare_texture_patch_views
 
+from tests.test_texture_training import MAKEFILE_PATH, _parse_make_targets
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "configs/colab.json"
+STAGE1_NOTEBOOK_PATH = REPO_ROOT / "notebooks/10_texture_robustness_stage1.ipynb"
 
 
 class TextureRobustnessContractTests(unittest.TestCase):
@@ -1120,6 +1123,230 @@ class TextureRobustnessComparisonTests(unittest.TestCase):
             (output_root / "metadata" / "artifact_manifest.json").read_text(encoding="utf-8")
         )
         self.assertEqual(manifest["decision"], report["decision"])
+
+
+class TextureRobustnessCommandContractTests(unittest.TestCase):
+    """The break caught here is a launcher that reimplements transform, model, inference,
+    metric, or gate logic instead of calling the locked Stage-1 CLIs."""
+
+    def setUp(self) -> None:
+        self.makefile_text = MAKEFILE_PATH.read_text(encoding="utf-8")
+        self.targets = _parse_make_targets(self.makefile_text)
+
+    def test_makefile_declares_all_four_stage1_targets(self) -> None:
+        for target in (
+            "task9-robustness-test", "task9-robustness-materialize",
+            "task9-robustness-evaluate", "task9-robustness-compare",
+        ):
+            with self.subTest(target=target):
+                self.assertIn(target, self.targets, f"Makefile is missing target {target!r}")
+
+    def test_stage1_targets_reference_the_locked_clis(self) -> None:
+        self.assertIn(
+            "materialize_texture_robustness.py", self.targets.get("task9-robustness-materialize", "")
+        )
+        self.assertIn(
+            "evaluate_texture_robustness.py", self.targets.get("task9-robustness-evaluate", "")
+        )
+        self.assertIn(
+            "compare_texture_robustness.py", self.targets.get("task9-robustness-compare", "")
+        )
+
+    def test_stage1_caches_default_under_content_and_output_defaults_under_artifact_root(self) -> None:
+        self.assertRegex(
+            self.makefile_text, r"(?m)^TASK9_ROBUSTNESS_IMAGE_ROOT\s*\?=\s*/content(/|\s|$)"
+        )
+        self.assertRegex(
+            self.makefile_text, r"(?m)^TASK9_ROBUSTNESS_CACHE_ROOT\s*\?=\s*/content(/|\s|$)"
+        )
+        self.assertRegex(
+            self.makefile_text,
+            r"(?m)^TASK9_ROBUSTNESS_OUTPUT_ROOT\s*\?=\s*\$\(ARTIFACT_ROOT\)/task9/clean_pilot_v1/robustness_stage1_v1\s*$",
+        )
+
+    def test_stage1_evaluate_and_compare_depend_on_the_locked_clean_experiment_root(self) -> None:
+        evaluate_recipe = self.targets.get("task9-robustness-evaluate", "")
+        compare_recipe = self.targets.get("task9-robustness-compare", "")
+        self.assertIn("$(TASK9_ROBUSTNESS_CLEAN_ROOT)", evaluate_recipe)
+        self.assertIn("$(TASK9_ROBUSTNESS_CLEAN_ROOT)", compare_recipe)
+        self.assertIn("$(TASK9_ROBUSTNESS_CONTROLLED_RINE_ROOT)", compare_recipe)
+
+    def test_clean_launcher_is_referenced_only_by_its_renamed_path(self) -> None:
+        self.assertNotIn("07_texture_stage_d.ipynb", self.makefile_text)
+        for path in (REPO_ROOT / "notebooks" / "README.md", REPO_ROOT / "docs" / "planning" / "nextSteps.md"):
+            with self.subTest(path=path):
+                self.assertNotIn("07_texture_stage_d.ipynb", path.read_text(encoding="utf-8"))
+        self.assertTrue((REPO_ROOT / "notebooks" / "09_texture_stage_d.ipynb").is_file())
+
+    def test_stage1_notebook_is_a_thin_launcher_with_no_inlined_transform_model_or_gate_logic(self) -> None:
+        self.assertTrue(STAGE1_NOTEBOOK_PATH.is_file(), f"{STAGE1_NOTEBOOK_PATH} does not exist")
+        notebook = json.loads(STAGE1_NOTEBOOK_PATH.read_text(encoding="utf-8"))
+        code_cells = [cell for cell in notebook["cells"] if cell.get("cell_type") == "code"]
+        self.assertTrue(code_cells, "notebook has no code cells")
+        source_text = "\n".join("".join(cell["source"]) for cell in code_cells)
+
+        forbidden_patterns = (
+            r"class\s+\w+\s*\(",
+            r"nn\.Module",
+            r"nn\.Linear",
+            r"nn\.Sequential",
+            r"def\s+forward\s*\(",
+            r"def\s+evaluate_texture_stage1\s*\(",
+            r"def\s+compare_texture_stage1\s*\(",
+            r"def\s+materialize_texture_stage1\s*\(",
+            r"prepare_texture_patch_views",
+            r"build_texture_head",
+            r"binary_metrics",
+            r"apply_benchmark",
+        )
+        for pattern in forbidden_patterns:
+            with self.subTest(pattern=pattern):
+                self.assertNotRegex(source_text, pattern)
+
+        for script in (
+            "materialize_texture_robustness.py", "evaluate_texture_robustness.py",
+            "compare_texture_robustness.py",
+        ):
+            with self.subTest(script=script):
+                self.assertIn(script, source_text)
+
+    def test_stage1_notebook_never_reads_seed_train_self_train_pool_or_final_test(self) -> None:
+        notebook = json.loads(STAGE1_NOTEBOOK_PATH.read_text(encoding="utf-8"))
+        code_cells = [cell for cell in notebook["cells"] if cell.get("cell_type") == "code"]
+        source_text = "\n".join("".join(cell["source"]) for cell in code_cells)
+        for forbidden in ("seed_train", "self_train_pool", "final_test"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source_text)
+
+
+class TextureRobustnessFixtureSmokeTests(TextureRobustnessEvaluationTests):
+    """The break caught here is any Stage-1 stage that needs pretrained weights, a GPU, or that
+    reaches outside its declared temporary root into the real repository artifacts or a Drive-like
+    path. Covers materialization, shared fake extraction, all 81 frozen texture evaluations, the
+    three hash-verified controlled-RINE files with their 27 seed-cell partitions, the two-comparator
+    gate, and hashed publication."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.rine_root = self.root / "controlled-rine"
+        self._write_rine_predictions()
+
+    @staticmethod
+    def _snapshot(directory: Path) -> set[tuple[str, int]]:
+        if not directory.is_dir():
+            return set()
+        return {
+            (str(path.relative_to(directory)), path.stat().st_size)
+            for path in directory.rglob("*")
+            if path.is_file()
+        }
+
+    def _write_rine_predictions(self) -> None:
+        import torch
+
+        for seed in (42, 43, 44):
+            run = self.rine_root / f"seed_{seed}"
+            run.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "stage": "controlled_rine_robustness", "seed": seed,
+                    "matching_policy": "fixed_q96", "threshold": 0.5,
+                    "transform_cells": list(STAGE1_CELL_IDS),
+                    "manifest_sha256": "controlled-rine-manifest-hash",
+                },
+                run / "best_50_50.pt",
+            )
+            path = run / "best_50_50_predictions.csv"
+            with path.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(
+                    stream,
+                    fieldnames=(
+                        "sample_id", "source_id", "parent_id", "split", "label",
+                        "logit", "probability", "checkpoint", "seed",
+                        "matching_policy", "transform", "transform_parameter",
+                        "dataset_name", "generator_name", "generator_checkpoint",
+                        "capture_source",
+                    ),
+                )
+                writer.writeheader()
+                parents = [
+                    (label, f"{label}__matched_clean__fixed_q96") for label in ("authentic", "ai_generated")
+                ]
+                for label, parent_id in parents:
+                    probability = _probability_for(label, correct=True)
+                    writer.writerow(
+                        {
+                            "sample_id": parent_id, "source_id": label, "parent_id": parent_id,
+                            "split": "selection_val", "label": label,
+                            "logit": "1" if probability >= 0.5 else "-1", "probability": probability,
+                            "checkpoint": "controlled_rine", "seed": seed,
+                            "matching_policy": "fixed_q96", "transform": "clean",
+                            "transform_parameter": "", "dataset_name": "fixture",
+                            "generator_name": "unknown", "generator_checkpoint": "unknown",
+                            "capture_source": "unknown",
+                        }
+                    )
+                for cell_id in STAGE1_CELL_IDS:
+                    for label, parent_id in parents:
+                        probability = _probability_for(label, correct=True)
+                        writer.writerow(
+                            {
+                                "sample_id": f"{parent_id}__{cell_id}", "source_id": label,
+                                "parent_id": parent_id, "split": "selection_val", "label": label,
+                                "logit": "1" if probability >= 0.5 else "-1", "probability": probability,
+                                "checkpoint": "controlled_rine", "seed": seed,
+                                "matching_policy": "fixed_q96", "transform": "benchmark",
+                                "transform_parameter": json.dumps({"cell_id": cell_id}),
+                                "dataset_name": "fixture", "generator_name": "unknown",
+                                "generator_checkpoint": "unknown", "capture_source": "unknown",
+                            }
+                        )
+
+    def test_full_pipeline_runs_under_a_temporary_root_without_touching_real_artifacts_or_drive(
+        self,
+    ) -> None:
+        real_artifacts_before = self._snapshot(REPO_ROOT / "artifacts")
+
+        with patch(
+            "cya_detector.evaluation.texture_robustness._extract_transformed_feature_bank",
+            side_effect=self._fake_features,
+        ):
+            evaluation_summary = evaluate_texture_stage1(**self.evaluation_args)
+        self.assertEqual(evaluation_summary["completed_slices"], 81)
+        self.assertEqual(len(list(self.prediction_root.rglob("*.csv"))), 81)
+
+        for seed in (42, 43, 44):
+            with self.subTest(seed=seed):
+                self.assertTrue((self.rine_root / f"seed_{seed}" / "best_50_50.pt").is_file())
+                with (self.rine_root / f"seed_{seed}" / "best_50_50_predictions.csv").open(
+                    newline="", encoding="utf-8"
+                ) as stream:
+                    rows = list(csv.DictReader(stream))
+                self.assertEqual(
+                    len({(row["parent_id"], row["transform_parameter"]) for row in rows if row["transform"] != "clean"}),
+                    len(STAGE1_CELL_IDS) * 2,
+                )
+
+        compare_output = self.root / "compare-output"
+        report = compare_texture_stage1(
+            clean_experiment_root=self.clean_root,
+            robustness_root=self.prediction_root,
+            controlled_rine_root=self.rine_root,
+            config=self.config,
+            output_root=compare_output,
+        )
+        self.assertIn(
+            report["decision"],
+            ("retain_texture_for_full_robustness", "reject_texture_robustness_stage1"),
+        )
+        self.assertEqual(report["comparators"]["controlled_rine"]["cell_count"], len(STAGE1_CELL_IDS))
+        manifest = json.loads(
+            (compare_output / "metadata" / "artifact_manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(manifest["decision"], report["decision"])
+
+        self.assertEqual(self._snapshot(REPO_ROOT / "artifacts"), real_artifacts_before)
+        self.assertFalse((REPO_ROOT / "artifacts" / "task9").exists())
 
 
 if __name__ == "__main__":
