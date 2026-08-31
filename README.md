@@ -130,19 +130,16 @@ judge-facing footprint stays small; check out `main` for it.
 - **No latency/memory numbers exist yet on target hardware.** The predictor
   has been verified to run correctly end-to-end on local CPU, but hasn't
   been profiled on the target Colab GPU.
-- **Given more time**, priority order: (1) fit a non-degenerate calibration
-  on data that actually contains errors, (2) validate the C2PA schema
-  against a real signed sample, (3) run resource profiling on target
-  hardware, (4) revisit the rejected texture-aware path with a more robust
-  fusion strategy under aggressive downsampling/blur, since it matched
-  controlled RINE on clean accuracy but failed only on robustness.
+- **Given more time**, priority order:
+  (1) fit a non-degenerate calibration on data that actually contains errors
+  (2) validate the C2PA schema against a real signed sample
+  (3) run resource profiling on target hardware
+  (4) revisit the rejected texture-aware path with a more robust fusion strategy under aggressive downsampling/blur, since it matched controlled RINE on clean accuracy but failed only on robustness.
 
 ## Team member contributions
 
-<!-- TODO: fill in participant names and their contribution areas before
-     submitting, e.g.:
-- Name A — Tasks 1-5 (data pipeline, CLIP baseline, evaluation harness)
-- Name B — Tasks 6-8 (RINE, frequency/color/PRNU features, robustness fusion)
-- Name C — Task 9 (texture-aware local-detail path)
-- Name D — Task 10 (inference CLI, backend/frontend, calibration, packaging)
--->
+Max (maxi-cmyk) — Built the repository infrastructure, reproducible configuration, Colab workflows, and image-data pipeline; implemented the CLIP/RINE detector baselines, evaluation and robustness tooling, physical-feature experiments, inference backend and CLI, calibration, resource profiling, final-test workflow, and submission integration.
+
+Rae (raetan2023) — Built the deterministic image-transformation and augmentation framework for JPEG, blur, resize, noise, color, and crop robustness; designed and implemented the texture-aware local-detail detector; and strengthened testing, cross-platform behavior, architecture, planning, and submission documentation.
+
+Shan He (cshsean) — Implemented the initial deterministic frequency, color, optics, PRNU, and texture feature extractors with tests; authored SAFE augmentation and training-data guidance; and built the React/Vite image-prediction and evaluation-dashboard frontend.
