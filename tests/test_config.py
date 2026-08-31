@@ -147,10 +147,23 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(task8b["allow_noncommercial_genimage"])
 
     def test_task8b_paths_must_be_relative(self) -> None:
-        candidate = copy.deepcopy(self.config)
-        candidate["task8b"]["artifact_relative_path"] = "/tmp/task8b"
-        with self.assertRaises(ConfigError):
-            validate_config(candidate)
+        for unsafe_path in (
+            "/tmp/task8b",
+            r"C:\tmp\task8b",
+            r"\\server\share\task8b",
+            "../task8b",
+        ):
+            with self.subTest(unsafe_path=unsafe_path):
+                candidate = copy.deepcopy(self.config)
+                candidate["task8b"]["artifact_relative_path"] = unsafe_path
+                with self.assertRaises(ConfigError):
+                    validate_config(candidate)
+
+    def test_prnu_v2_wavelet_backend_is_declared_for_each_runtime(self) -> None:
+        for filename in ("requirements.txt", "requirements-colab.txt"):
+            with self.subTest(filename=filename):
+                requirements = (REPO_ROOT / filename).read_text(encoding="utf-8").lower()
+                self.assertIn("pywavelets", requirements)
 
     def test_task8b_split_contract_is_separate(self) -> None:
         candidate = copy.deepcopy(self.config)

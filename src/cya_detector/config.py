@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 
@@ -240,8 +240,15 @@ def validate_config(config: dict[str, Any]) -> None:
         "genimage_ai_relative_path",
         "artifact_relative_path",
     ):
-        value = Path(task8b[name])
-        if value.is_absolute() or ".." in value.parts:
+        raw_value = task8b[name]
+        posix_value = PurePosixPath(raw_value)
+        windows_value = PureWindowsPath(raw_value)
+        if (
+            posix_value.is_absolute()
+            or windows_value.is_absolute()
+            or ".." in posix_value.parts
+            or ".." in windows_value.parts
+        ):
             raise ConfigError(f"task8b.{name} must be a safe relative path")
     if Path(task8b["inventory_filename"]).name != task8b["inventory_filename"]:
         raise ConfigError("task8b.inventory_filename must be a filename")

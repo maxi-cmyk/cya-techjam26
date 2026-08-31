@@ -10,6 +10,7 @@ scipy>=1.13,<2
 pandas>=2.2,<4
 scikit-learn>=1.5,<2
 scikit-image>=0.24,<1
+PyWavelets>=1.6,<2
 opencv-python-headless>=4.10,<5
 Pillow>=10.4,<13
 c2pa-python>=0.37,<0.38
