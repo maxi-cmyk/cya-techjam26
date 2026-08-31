@@ -78,7 +78,7 @@ class InferenceCliTests(unittest.TestCase):
         self.assertEqual(report["errors"][0]["code"], "unsupported_image")
         self.assertNotIn("/", report["errors"][0]["message"])
 
-    def test_missing_default_checkpoint_falls_back_to_stub_with_a_loud_warning(self) -> None:
+    def test_missing_checkpoint_is_fatal_and_publishes_nothing(self) -> None:
         Image.new("RGB", (4, 4)).save(self.image_dir / "a.png")
 
         result = self._run(
@@ -86,11 +86,10 @@ class InferenceCliTests(unittest.TestCase):
             "--checkpoint", str(self.root / "does-not-exist.pt"),
         )
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("WARNING", result.stderr)
-        self.assertIn("stub predictor", result.stderr)
-        predictions = json.loads((self.output_dir / "predictions.json").read_text())
-        self.assertEqual(predictions, [{"image_path": "a.png", "pred": 0.5}])
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("fatal: no checkpoint found", result.stderr)
+        self.assertFalse((self.output_dir / "predictions.json").exists())
+        self.assertFalse((self.output_dir / "report.json").exists())
 
     def test_empty_directory_is_fatal_and_publishes_nothing(self) -> None:
         result = self._run(str(self.image_dir), "--output-dir", str(self.output_dir), "--no-checkpoint")

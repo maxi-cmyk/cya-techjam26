@@ -1,1 +1,1 @@
-"""Model-agnostic directory-inference pipeline (Task 10A)."""
+"""Directory inference for the retained controlled-RINE submission model."""

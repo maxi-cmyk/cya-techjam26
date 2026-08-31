@@ -14,9 +14,9 @@ Exit codes: 0 full success, 1 fatal run failure, 2 argument usage error,
 3 partial success (some images were invalid; predictions.json still
 contains every image that scored successfully).
 
-Currently uses a placeholder predictor (Task 10A skeleton, model-agnostic
-by design); Task 10B wires in the real calibrated controlled-RINE checkpoint
-in place of it.
+Uses the committed controlled-RINE seed-42 checkpoint by default. The
+``--no-checkpoint`` option explicitly selects a constant test stub and is not
+part of the submission inference path.
 """
 
 from __future__ import annotations

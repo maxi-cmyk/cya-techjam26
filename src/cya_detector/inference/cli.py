@@ -24,9 +24,7 @@ DEFAULT_CHECKPOINT_PATH = (
 
 
 def stub_predictor(image: Image.Image) -> float:
-    """Placeholder predictor. Only used when no real checkpoint can be found;
-    ``main`` prints a loud warning to stderr whenever this is what actually ran.
-    """
+    """Constant test stub, used only when ``--no-checkpoint`` is explicit."""
 
     return 0.5
 
@@ -79,13 +77,12 @@ def main(argv: list[str] | None = None, *, predict_probability: Predictor | None
             predict_probability = RinePredictor(checkpoint_path=args.checkpoint, device=args.device)
         else:
             print(
-                f"WARNING: no checkpoint found at {args.checkpoint} — falling back to the "
-                "placeholder stub predictor. Every 'pred' in the output is a meaningless "
-                "constant 0.5, not a real score. Pass --checkpoint to point at the real "
-                "controlled-RINE seed-42 checkpoint.",
+                f"fatal: no checkpoint found at {args.checkpoint}. "
+                "Restore the committed controlled-RINE seed-42 checkpoint or pass "
+                "--checkpoint with its path.",
                 file=sys.stderr,
             )
-            predict_probability = stub_predictor
+            return EXIT_FATAL
 
     def progress(line: str) -> None:
         print(line)

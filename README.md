@@ -19,8 +19,9 @@ sampler. It reached 100.00% clean accuracy, 99.62% mean robustness accuracy,
 and a 99.81% locked 50/50 score across seeds 42/43/44. Frequency, color/Lab,
 PRNU, and a texture-aware local-patch path were all built and evaluated as
 candidate additions and were all **rejected** after failing the locked-score
-or robustness gate (see `docs/planning/nextSteps.md` on `main` for the full
-experimental history).
+or robustness gate (see the
+[`main`-branch experimental history](https://github.com/maxi-cmyk/cya-techjam26/blob/main/docs/planning/nextSteps.md)
+for the full record).
 
 **Sealed `final_test` result (run exactly once, 2026-08-31, 141 held-out
 samples): 99.29% overall accuracy** — 100.00% AI-generated accuracy (69/69,
@@ -37,6 +38,10 @@ the frozen CLIP backbone downloads automatically from Hugging Face on first
 use). **No Colab, Drive access, or manual staging needed** — `git clone` +
 `pip install` + run is the complete judge-facing path.
 
+See [How the inference pipeline works](docs/inference-pipeline.md)
+for the complete path from directory discovery through C2PA verification,
+controlled-RINE scoring, confidence validation, and atomic JSON publication.
+
 The `backend/` FastAPI service and `frontend/` React app wrap the same CLI
 logic behind a drag-and-drop UI, for a visual demo of the same model.
 
@@ -45,15 +50,17 @@ logic behind a drag-and-drop UI, for a visual demo of the same model.
 Requires Python >= 3.10.
 
 ```bash
-git clone <this repository>
+git clone https://github.com/maxi-cmyk/cya-techjam26.git
 cd cya-techjam26
 python -m pip install -r requirements.txt
 python -m pip install -e . --no-deps
 ```
 
-Run the test suite (no GPU or dataset required):
+To run the test suite, install the development dependencies as well (no GPU
+or dataset required):
 
 ```bash
+python -m pip install -r requirements-dev.txt
 python -m pytest tests/
 ```
 
@@ -119,16 +126,51 @@ cat /tmp/demo_output/predictions.json
 
 ### Reproducing the training/evaluation results
 
-The 99.81% locked-score result, the Task 9 texture-path rejection, and the
-sealed 99.29% `final_test` result all come from Colab notebook runs recorded
-in `docs/planning/nextSteps.md` on the `main` branch, which also carries the
-full data pipeline, training scripts, and notebooks required to reproduce
-them from scratch. `final_test` itself is not reproducible by design — it
-has already been run exactly once and the code that reads it refuses to run
-a second time against existing output.
+The full data pipeline, training code, evaluation harness, and experiment
+notebooks live on the public `main` branch. From this checkout, switch to it
+and install the complete development environment:
 
-This `submission` branch intentionally omits that pipeline so the
-judge-facing footprint stays small; check out `main` for it.
+```bash
+git checkout main
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
+python -m pip install -e . --no-deps
+make test
+```
+
+Reproduce the retained controlled-RINE clean/robustness result in Google
+Colab by running these notebooks in order:
+
+1. `notebooks/00_colab_setup.ipynb` — install dependencies and mount the
+   configured dataset/artifact roots.
+2. `notebooks/01_task2_data_contract.ipynb` — build the matched-clean
+   fixed-Q96 manifest and deterministic splits.
+3. `notebooks/02_stage_a_clip.ipynb` — run the frozen-CLIP Stage A baseline.
+4. `notebooks/03_rine_stage_b.ipynb` — run the initial RINE ablation.
+5. `notebooks/07_robustness_rerun.ipynb` — materialize the 14 independent
+   transform cells and train/evaluate controlled RINE with seeds 42, 43,
+   and 44.
+
+The expected aggregate result is 100.00% mean clean accuracy, 99.62% mean
+robustness accuracy, and a 99.81% mean locked score, where
+`locked_score = 0.5 * clean_accuracy + 0.5 * mean_transform_accuracy`.
+The source image dataset and shared Colab artifact store are not committed
+to Git because of their size and licensing; reproducing the numeric training
+result requires access to those inputs. The notebooks validate their
+manifests before training and write the checkpoints, per-cell predictions,
+metrics, and retention decisions under `artifacts/robustness/`.
+
+For the rejected texture candidate, then run
+`notebooks/09_texture_stage_d.ipynb` followed by
+`notebooks/10_texture_robustness_stage1.ipynb`. The expected decision is
+`reject_texture_robustness_stage1`.
+
+The complete recorded evidence and model-selection decisions are in the
+[`main`-branch roadmap](https://github.com/maxi-cmyk/cya-techjam26/blob/main/docs/planning/nextSteps.md).
+The sealed 99.29% `final_test` result is intentionally not rerunnable:
+`notebooks/11_final_test.ipynb` performed the one authorized read, and
+`scripts/run_final_test.py` refuses to overwrite or resume an existing final
+evaluation. Do not delete its prior output to force another run.
 
 ## Limitations and what we'd improve with more time
 
