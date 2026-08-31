@@ -21,19 +21,27 @@ failing the locked-score or robustness gate — see
 below for why each one failed and what that implies.
 
 **Submission entry point:** [`run_inference.py`](run_inference.py) at the
-repository root. It takes a directory of images and writes a
-`predictions.json` file of `{"image_path", "pred"}` confidence scores (0 =
-authentic, 1 = AI-generated), plus a `report.json` validation summary. See
-[Steps to reproduce your results](#steps-to-reproduce-your-results) for exact
-commands. Everything else under `scripts/` is internal pipeline tooling
-(dataset construction, training, evaluation, robustness testing across
-Tasks 1–10) — not something a grader needs to run.
+repository root:
 
-**Current status:** the submission entry point is fully implemented and
-tested, but as of this writing it runs a placeholder predictor (a fixed
-constant) rather than the real controlled-RINE checkpoint — see
-[Limitations and what we'd improve with more time](#limitations-and-what-wed-improve-with-more-time),
-first bullet, before treating `predictions.json` output as real scores.
+```
+python run_inference.py <image_dir> --output-dir <output_dir> --checkpoint artifacts/robustness/train-controlled-rine/seed_42/best_50_50.pt
+```
+
+It takes a directory of images and writes a `predictions.json` file of
+`{"image_path", "pred"}` confidence scores (0 = authentic, 1 = AI-generated),
+plus a `report.json` validation summary, using the real controlled-RINE
+seed-42 checkpoint. See
+[Steps to reproduce your results](#steps-to-reproduce-your-results) for full
+commands, including how to restore the checkpoint. Everything else under
+`scripts/` is internal pipeline tooling (dataset construction, training,
+evaluation, robustness testing across Tasks 1–10) — not something a grader
+needs to run.
+
+**Current status:** the submission entry point is fully implemented, tested,
+and wired to the real, selected model (controlled RINE, seed 42) — see
+[Limitations and what we'd improve with more time](#limitations-and-what-wed-improve-with-more-time)
+for what's still outstanding (resource profiling on target hardware, the
+sealed `final_test` run).
 
 ## Setup and installation instructions
 
@@ -125,14 +133,18 @@ sealed throughout — none of this reproduction path touches it.
 
 ## Limitations and what we'd improve with more time
 
-- **The submission script does not yet call the real model.**
-  `run_inference.py` is fully implemented, tested, and runnable end-to-end,
-  but its predictor is currently a stub that always returns `0.5`. Wiring in
-  the calibrated controlled-RINE seed-42 checkpoint is a single-function
-  swap (`predict_probability` in `src/cya_detector/inference/cli.py`) once
-  Task 10B's adapter is finished — but if this repository is graded before
-  that swap lands, **`predictions.json` output is not a real score**. This
-  is the single most important thing to fix first with more time.
+- **Reported probabilities are uncalibrated (T=1) by deliberate decision, not
+  oversight.** Fitting one temperature on seed 42's clean `selection_val`
+  logits (as originally planned) produced a degenerate result — that set has
+  zero errors, so NLL minimization has nothing to penalize overconfidence
+  and the fit ran to the search bound (T=0.05) instead of converging. Using
+  it would have crushed informative probabilities toward 0/1 without
+  changing any classification, since the binary threshold stays fixed
+  regardless of temperature. We chose to report raw sigmoid probabilities
+  instead. With more time and a calibration set that actually contains
+  errors (e.g. one of the robustness cells, or held-out data with induced
+  noise), a non-degenerate fit would likely improve the usefulness of the
+  reported confidence scores without changing any pass/fail decision.
 - **`final_test` has never been read.** Every result quoted here is on
   `selection_val`; the sealed held-out set is reserved for exactly one
   evaluation after the model, calibration, and threshold are fully frozen,
@@ -165,18 +177,19 @@ sealed throughout — none of this reproduction path touches it.
   so getting this wrong degrades gracefully rather than breaking anything —
   but it should be validated against a real signed sample before being
   relied on for the fast-path early exit.
-- **No latency/memory numbers exist yet for the real model.** The profiling
+- **No latency/memory numbers exist yet on target hardware.** The profiling
   utility (`src/cya_detector/evaluation/resource_profile.py`) is built and
-  tested against fixtures, but hasn't been run against the actual
-  controlled-RINE checkpoint on target hardware.
-- **Given more time**, the priority order would be: (1) wire and run the
-  real predictor end-to-end, (2) validate the C2PA schema against a real
-  signed sample, (3) run the remaining Task 3 noise/color-jitter/crop cells
-  now that a full robustness screen exists as infrastructure, (4) run
-  resource profiling on target hardware, (5) only then consider the
-  optional post-baseline experiments already scoped in
-  `docs/planning/nextSteps.md` (adapters/fine-tuning, self-training),
-  each as its own separately gated experiment.
+  tested against fixtures, and the real predictor has been verified to run
+  correctly end-to-end on local CPU, but it hasn't been profiled on the
+  target Colab GPU.
+- **Given more time**, the priority order would be: (1) fit a non-degenerate
+  calibration on data that actually contains errors, (2) validate the C2PA
+  schema against a real signed sample, (3) run the remaining Task 3
+  noise/color-jitter/crop cells now that a full robustness screen exists as
+  infrastructure, (4) run resource profiling on target hardware, (5) only
+  then consider the optional post-baseline experiments already scoped in
+  `docs/planning/nextSteps.md` (adapters/fine-tuning, self-training), each
+  as its own separately gated experiment.
 
 ## Team member contributions
 
@@ -312,24 +325,43 @@ Tests: `tests/test_c2pa_inference.py`, `tests/test_directory_inference.py`
 (discovery, decode/validate, and the full run_inference pipeline), and
 `tests/test_inference_cli.py`.
 
-### Task 10B — Model selection, calibration, and resource profiling (in progress)
+### Task 10B — Model selection, calibration, and resource profiling
 
 - **Model selection: done.** Controlled RINE seed 42 (99.85% locked score,
-  the highest of the three retained seeds) is the packaged checkpoint.
-- **Calibration: implemented, not yet run on real data.**
+  the highest of the three retained seeds) is the packaged checkpoint. The
+  real checkpoint and its clean `selection_val` predictions were restored
+  from Drive to `artifacts/robustness/train-controlled-rine/seed_42/` and
+  verified against the recorded 99.85%.
+- **Calibration: run against real data — skipped, using T=1.**
   `src/cya_detector/evaluation/calibration.py`'s `fit_temperature()` fits one
-  scalar temperature minimizing NLL on clean `selection_val` logits (fails
-  closed on wrong split, non-clean cell, mixed seeds, single-class input, or
-  non-finite logits), wired to
-  `scripts/fit_temperature_calibration.py`. Developed and tested against
-  synthetic data since the real seed-42 predictions live on Drive, not in
-  this checkout.
-- **Resource profiling: implemented, not yet run on real hardware.**
+  scalar temperature minimizing NLL on clean `selection_val` logits, and is
+  unit-tested to correctly recover known temperatures on synthetic data. Run
+  for real against seed 42's 165 clean rows, it returned a degenerate result:
+  the fit hit the search bound (T=0.05) instead of an interior minimum,
+  because that set has zero errors — with nothing to penalize
+  overconfidence, NLL minimization only wants to sharpen further, and using
+  T=0.05 would crush already-informative probabilities toward 0/1 without
+  changing any classification (the threshold stays fixed at 0.5 regardless).
+  **Decision: skip calibration, report raw sigmoid probabilities (T=1).**
+  See `docs/planning/nextSteps.md` for the full writeup.
+- **Real predictor: wired in.** `src/cya_detector/inference/rine_predictor.py`'s
+  `RinePredictor` loads the frozen CLIP-ViT-L/14-336 backbone (pinned
+  resolved revision), extracts layers 6/12/18/24 CLS tokens, and applies the
+  loaded controlled-RINE seed-42 head — validating checkpoint identity and
+  the resolved CLIP revision before serving any prediction, and refusing
+  non-finite output. Wired into the CLI as an optional `--checkpoint` flag
+  (`run_inference.py <dir> --output-dir <dir> --checkpoint
+  artifacts/robustness/train-controlled-rine/seed_42/best_50_50.pt`);
+  omitting it keeps the Task 10A stub for testing. 8 tests pass against a
+  deterministic fixture CLIP, plus a real end-to-end run against the actual
+  downloaded CLIP weights and checkpoint (`exit=0`, a real non-trivial
+  probability, not the stub's constant `0.5`).
+- **Resource profiling: implemented, not yet run on target hardware.**
   `src/cya_detector/evaluation/resource_profile.py`'s `profile_predictor()`
   measures per-call latency (mean/median/p95/max) and peak GPU memory;
   `checkpoint_disk_footprint()` reports on-disk checkpoint size. Both are
-  model-agnostic and tested against fixtures.
-- **Not started:** wiring the calibrated controlled-RINE seed-42 checkpoint
-  into `predict_probability` in place of Task 10A's stub, running the sealed
-  `final_test` once everything above is frozen, and any optional
-  post-baseline experiment.
+  model-agnostic and tested against fixtures; not yet run against the real
+  checkpoint on the target Colab GPU.
+- **Not started:** running the sealed `final_test` once everything above is
+  frozen (needs separate explicit approval regardless of readiness), and any
+  optional post-baseline experiment.

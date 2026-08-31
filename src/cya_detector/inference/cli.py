@@ -39,12 +39,35 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Directory to write predictions.json and report.json into.",
     )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the controlled-RINE seed-42 checkpoint (best_50_50.pt). "
+            "If omitted, uses a placeholder stub predictor that always returns 0.5."
+        ),
+    )
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        choices=("cpu", "cuda"),
+        help="Device for the real predictor (ignored when --checkpoint is omitted).",
+    )
     return parser
 
 
-def main(argv: list[str] | None = None, *, predict_probability: Predictor = stub_predictor) -> int:
+def main(argv: list[str] | None = None, *, predict_probability: Predictor | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if predict_probability is None:
+        if args.checkpoint is not None:
+            from cya_detector.inference.rine_predictor import RinePredictor
+
+            predict_probability = RinePredictor(checkpoint_path=args.checkpoint, device=args.device)
+        else:
+            predict_probability = stub_predictor
 
     def progress(line: str) -> None:
         print(line)
