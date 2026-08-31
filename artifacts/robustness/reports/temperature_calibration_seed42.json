@@ -1,0 +1,11 @@
+{
+  "ece_after": 1.3288073619275727e-06,
+  "ece_before": 0.013790430385924007,
+  "nll_after": 1.3289521870066198e-06,
+  "nll_before": 0.015223405839820082,
+  "sample_count": 165,
+  "seed": 42,
+  "source_predictions_path": "artifacts/robustness/train-controlled-rine/seed_42/best_50_50_predictions.csv",
+  "source_predictions_sha256": "60a4401254da6b60113b426088fcba8b8c41878ee8f47e3a713a8ce3fd9c73ac",
+  "temperature": 0.05000383056845283
+}
