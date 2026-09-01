@@ -174,8 +174,42 @@ under `<path-to-image-directory>` (case-insensitive, symlinks never
 followed), runs each through a C2PA verified-AI-generation-claim check
 followed by the predictor, and writes:
 
-- `<output-directory>/predictions.json` — `[{"image_path": "...", "pred": 0.0-1.0}, ...]`
-- `<output-directory>/report.json` — `{"schema_version", "summary": {"discovered", "predicted", "invalid"}, "errors": [...]}`
+- `<output-directory>/predictions.json` — one record per successfully scored image.
+  `image_path` is relative to the input directory, and `pred` is explicitly
+  **`P(AI)`**, the model's AI-generation score from `0.0` to `1.0. A score
+  below `0.5` is classified as authentic; a score at or above `0.5` is
+  classified as AI-generated. This is the model's raw sigmoid output at
+  temperature `T=1`, not a post-hoc-calibrated probability.
+- `<output-directory>/report.json` — run-level status. `summary.discovered`
+  counts supported image files found, `summary.predicted` counts successful
+  predictions, and `summary.invalid` counts discovered files that could not
+  be validated. Each `errors` entry identifies the relative `image_path` and
+  provides a stable `code` and `message`; `errors` is empty on full success.
+
+Example `predictions.json`:
+
+```json
+[
+  {
+    "image_path": "nested/example.png",
+    "pred": 0.08335919678211212
+  }
+]
+```
+
+Example `report.json`:
+
+```json
+{
+  "schema_version": 1,
+  "summary": {
+    "discovered": 1,
+    "predicted": 1,
+    "invalid": 0
+  },
+  "errors": []
+}
+```
 
 Exit codes: `0` full success, `1` fatal (nothing published — e.g. an empty
 input directory), `2` bad arguments, `3` partial success (some images were
