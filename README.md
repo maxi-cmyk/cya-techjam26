@@ -53,39 +53,30 @@ run.
 
 ```mermaid
 flowchart TB
-    subgraph MACHINE["Local machine / judge environment"]
-        direction TB
+    UI["React app · Vite dev server<br/>localhost:5173"]
 
-        subgraph BROWSER["Browser"]
-            UI["React app — Vite dev server<br/>localhost:5173<br/>frontend/src/pages/PredictPage.tsx"]
-        end
-
-        subgraph PROC_API["Process: uvicorn<br/>backend.app:app · localhost:8000"]
-            API["FastAPI service<br/>backend/app.py<br/>CORS: allow_origins=*"]
-        end
-
-        subgraph PROC_CLI["Process: python run_inference.py<br/>(one-shot, no server)"]
-            CLI["CLI entry point<br/>run_inference.py -> inference/cli.py"]
-        end
-
-        subgraph PKG["Shared package: src/cya_detector<br/>(pip install -e ., imported by both processes)"]
-            CORE["inference/*<br/>runner · inputs · c2pa · output · contracts"]
-            MODELS["models/*<br/>clip_baseline.py · rine.py"]
-        end
-
-        CKPT[("Checkpoint file<br/>artifacts/robustness/train-controlled-rine/<br/>seed_42/best_50_50.pt — 17KB, committed in git")]
+    subgraph API_PROC["Process — uvicorn :8000"]
+        API["FastAPI service<br/>backend/app.py"]
     end
 
-    subgraph EXTERNAL["External network (first use only)"]
-        HF[("Hugging Face Hub<br/>openai/clip-vit-large-patch14-336<br/>pinned revision ce19dc9…<br/>cached locally after first download")]
+    subgraph CLI_PROC["Process — one-shot"]
+        CLI["run_inference.py"]
     end
 
-    UI -->|"POST /predict<br/>multipart file upload"| API
-    API -->|"import"| CORE
-    CLI -->|"import"| CORE
-    CORE -->|"import"| MODELS
-    MODELS -->|"torch.load()"| CKPT
-    MODELS -->|"from_pretrained()<br/>first run only, then cached"| HF
+    subgraph PKG["Shared package — src/cya_detector"]
+        CORE["inference/*"]
+        MODELS["models/*"]
+    end
+
+    CKPT[("Checkpoint<br/>seed_42/best_50_50.pt<br/>17KB, committed in git")]
+    HF[("Hugging Face Hub<br/>CLIP-ViT-L/14-336<br/>cached after first run")]
+
+    UI -->|"POST /predict"| API
+    API --> CORE
+    CLI --> CORE
+    CORE --> MODELS
+    MODELS --> CKPT
+    MODELS -.->|"first run only"| HF
 
     classDef proc fill:#e1e8f0,stroke:#3d5a80,color:#1a2220;
     classDef cliproc fill:#e3eee7,stroke:#3f6e5e,color:#1a2220;
