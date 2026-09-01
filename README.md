@@ -45,6 +45,82 @@ controlled-RINE scoring, confidence validation, and atomic JSON publication.
 The `backend/` FastAPI service and `frontend/` React app wrap the same CLI
 logic behind a drag-and-drop UI, for a visual demo of the same model.
 
+## Architecture
+
+Two processes, one shared Python package, one external download. Nothing
+else needs a network: the judge-facing path is `git clone` + `pip install` +
+run.
+
+```mermaid
+flowchart TB
+    subgraph MACHINE["Local machine / judge environment"]
+        direction TB
+
+        subgraph BROWSER["Browser"]
+            UI["React app — Vite dev server<br/>localhost:5173<br/>frontend/src/pages/PredictPage.tsx"]
+        end
+
+        subgraph PROC_API["Process: uvicorn<br/>backend.app:app · localhost:8000"]
+            API["FastAPI service<br/>backend/app.py<br/>CORS: allow_origins=*"]
+        end
+
+        subgraph PROC_CLI["Process: python run_inference.py<br/>(one-shot, no server)"]
+            CLI["CLI entry point<br/>run_inference.py -> inference/cli.py"]
+        end
+
+        subgraph PKG["Shared package: src/cya_detector<br/>(pip install -e ., imported by both processes)"]
+            CORE["inference/*<br/>runner · inputs · c2pa · output · contracts"]
+            MODELS["models/*<br/>clip_baseline.py · rine.py"]
+        end
+
+        CKPT[("Checkpoint file<br/>artifacts/robustness/train-controlled-rine/<br/>seed_42/best_50_50.pt — 17KB, committed in git")]
+    end
+
+    subgraph EXTERNAL["External network (first use only)"]
+        HF[("Hugging Face Hub<br/>openai/clip-vit-large-patch14-336<br/>pinned revision ce19dc9…<br/>cached locally after first download")]
+    end
+
+    UI -->|"POST /predict<br/>multipart file upload"| API
+    API -->|"import"| CORE
+    CLI -->|"import"| CORE
+    CORE -->|"import"| MODELS
+    MODELS -->|"torch.load()"| CKPT
+    MODELS -->|"from_pretrained()<br/>first run only, then cached"| HF
+
+    classDef proc fill:#e1e8f0,stroke:#3d5a80,color:#1a2220;
+    classDef cliproc fill:#e3eee7,stroke:#3f6e5e,color:#1a2220;
+    classDef pkg fill:#efe2ec,stroke:#7a4b6b,color:#1a2220;
+    classDef store fill:#f2e6d3,stroke:#a9762e,color:#1a2220;
+    classDef ext fill:#ffffff,stroke:#dde1da,color:#5b6660,stroke-dasharray:4 3;
+
+    class UI,API proc;
+    class CLI cliproc;
+    class CORE,MODELS pkg;
+    class CKPT store;
+    class HF ext;
+```
+
+- **`python run_inference.py`** — runs once and exits. Loads the CLIP
+  backbone + checkpoint into its own process memory, scores a directory,
+  writes `predictions.json` / `report.json`, returns an exit code. Nothing to
+  start, nothing left running.
+- **`uvicorn backend.app:app` (`:8000`)** — loads the same checkpoint once at
+  first request (`get_predictor()` caches it module-level) and keeps it
+  resident for every subsequent `/predict` call. CORS is wide open — a local
+  demo server, not hardened for public exposure.
+- **Vite dev server (`:5173`)** — static React app; ships zero model logic.
+  Its only coupling to the rest of the system is the hardcoded
+  `localhost:8000` fetch target.
+- **Checkpoint** — `artifacts/.../seed_42/best_50_50.pt`, 17KB, checked into
+  git directly. No Drive access, no Colab, no manual staging required to
+  reproduce a judge's run.
+- **CLIP weights** — `openai/clip-vit-large-patch14-336` pulled from Hugging
+  Face on first use, then cached by `transformers`' local cache — every run
+  after the first is fully offline.
+- **`c2pa-python`** — imported lazily inside `c2pa.py`; a missing install
+  just makes the Stage-0 claim check return `False` and fall through to the
+  model — it can't take the pipeline down.
+
 ## Setup and installation instructions
 
 Requires Python >= 3.10.
